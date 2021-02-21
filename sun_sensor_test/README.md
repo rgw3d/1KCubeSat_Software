@@ -1,11 +1,8 @@
-# EPS Software
+# Sun Sensor Test
 
-This repo contains rust code to run on the PMIC of the EPS for 1KCubeSat project. Hardware design files of the EPS can be found [in the 1KCubeSat Hardware repo](https://github.com/rgw3d/1KCubeSat_Hardware/tree/master/eps_board)
+This repo contains rust code to run on the IC of my Sun Sensor Test board, which I'm using to test a sensor for my $1K Cubesat. Hardware design files for this board can be found [in the 1KCubeSat Hardware repo](https://github.com/rgw3d/1KCubeSat_Hardware/tree/master/sun_sensor_test)
 
-- EPS stands for Electrical Power (Sub)System
-- PMIC stands for Power Managment IC
-
-The PMIC on this EPS is the STM32L496ZG.
+The IC used is the STM32L051R8
 
 ## Why Rust?
 
@@ -22,18 +19,13 @@ C and C++ based development for STM32 platforms is very well established, and is
 
 ### Actually getting the above tooling to work
 
-This is ***my*** repo, so I'll get on my soapbox.
+> See [`../eps/README.md`](../eps/README.md) for more specifics.
 
-**OpenOCD** isn't hard to [download](https://sourceforge.net/projects/openocd/), build and install, but the OpenOCD.cfg files are a mess.
-Instead of writing my own, or being able to easily finding one online, I just copied the `.cfg` out of my SW4STM32 (an eclipse based editor for writing C code for STM32) IDE's plugin path.
-Great! I have a `.cfg` for OpenOCD, but it only works with the SW4STM32 version of OpenOCD.
-The SW4STM32 version runs a dirty version of `v0.10.0`, (`v0.10.0-dev-00021-g524e8c8` specifically).
-Not sure what's going on there, but the same `.cfg` does NOT work with a clean `v0.10.0` of OpenOCD downloaded from the link above.
-Here's what I've had to do in order to use OpenOCD.
+## Run lib Unit tests
 
-- All OpenOCD config files that came with SW4STM32 can be [found in a subdirectory here](openocd_cfg/README.md)
-- Change my VSCode global `settings.json` to include `"cortex-debug.openocdPath": "/path/to/Ac6/SystemWorkbench/plugins/fr.ac6.mcu.externaltools.openocd.linux64_1.23.0.201904120827/tools/openocd/bin/openocd"`
-- Modify my `ldconfig` settings to include dynamic libraries so the above binary would run.
+```bash
+cargo test --lib --target=x86_64-unknown-linux-gnu --features=test
+```
 
 ## Manually install on target MCU
 
@@ -43,12 +35,6 @@ If all else fails, here's a manual way to flash your micro
 cargo build --release
 arm-none-eabi-objcopy -O binary target/thumbv7em-none-eabihf/release/sun_sensor_test out.bin
 st-flash --debug --reset --freq=100K write out.bin 0x8000000
-```
-
-## Run lib Unit tests
-
-```bash
-cargo test --lib --target=x86_64-unknown-linux-gnu --features=test
 ```
 
 ## [`cortex-m-quickstart`](https://github.com/rust-embedded/cortex-m-quickstart)

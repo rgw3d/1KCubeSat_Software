@@ -15,14 +15,6 @@ panic-semihosting = "^0.5.6"
 heapless = "^0.6.0"
 nb = "1.0.0"
 
-#[dependencies.num-traits]
-#version = "0.2.11"
-#default-features = false
-##
-[dependencies.num-integer]
-version = "0.1.44"
-default-features = false
-
 [dependencies.transpose]
 version = "0.2.0"
 default-features = false
