@@ -1,0 +1,68 @@
+[package]
+authors = ["Richard Wendel <richard.wendel@hey.com>"]
+edition = "2018"
+readme = "README.md"
+name = "sun_sensor_test"
+version = "0.1.0"
+
+[dependencies]
+cortex-m = "0.7.1"
+cortex-m-rt = "0.6.10"
+cortex-m-semihosting = "0.3.3"
+cortex-m-rtic = "^0.5.5"
+# panic-halt = "0.2.0"
+panic-semihosting = "^0.5.6"
+heapless = "^0.6.0"
+nb = "1.0.0"
+
+#[dependencies.num-traits]
+#version = "0.2.11"
+#default-features = false
+##
+[dependencies.num-integer]
+version = "0.1.44"
+default-features = false
+
+[dependencies.transpose]
+version = "0.2.0"
+default-features = false
+git = "https://github.com/ejmahler/transpose.git"
+
+[dependencies.void]
+version = "1.0.2"
+default-features = false
+
+[dependencies.assert_float_eq]
+version = "1.1.3"
+optional = true
+
+# this lets you use `cargo fix`!
+[[bin]]
+name = "sun_sensor_test"
+test = false
+bench = false
+
+
+[features]
+default = []
+test = ["std", "assert_float_eq"]
+std = []
+
+[lib]
+name = "matrix_helper"           # The name of the target.
+path = "src/lib.rs"    # The source file of the target.
+
+
+[profile.release]
+codegen-units = 1 # better optimizations
+debug = true # symbols are nice and they don't increase the size on Flash
+lto = true # better optimizations
+
+[dependencies.stm32l0]
+version = "0.13.0"
+features = ["stm32l0x1", "rt"]
+
+[dependencies.stm32l0xx-hal]
+version = "0.6.2"
+git = "https://github.com/stm32-rs/stm32l0xx-hal.git"
+features = ["mcu-STM32L051R8Tx", "rt"]
