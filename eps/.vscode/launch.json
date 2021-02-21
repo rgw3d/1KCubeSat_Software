@@ -45,14 +45,14 @@
             "executable": "./target/thumbv7em-none-eabihf/release/eps",
             "device": "STM32L496ZGT6",
             "searchDir": [
-                "${workspaceRoot}/openocd_cfg/"
+                "${workspaceRoot}/../openocd_cfg/"
             ],
             "configFiles": [
                 "${workspaceRoot}/openocd.cfg",
                 //"interface/stlink-v2-1.cfg",
                 //"target/stm32l4x.cfg"
             ],
-            "svdFile": "${workspaceRoot}/svd/STM32L4x6.svd",
+            "svdFile": "${workspaceRoot}/../svd/STM32L4x6.svd",
             "swoConfig": {
                 "enabled": false,
                 "cpuFrequency": 8000000,
@@ -79,14 +79,14 @@
             "executable": "./target/thumbv7em-none-eabihf/debug/eps",
             "device": "STM32L496ZGT6",
             "searchDir": [
-                "${workspaceRoot}/openocd_cfg/"
+                "${workspaceRoot}/../openocd_cfg/"
             ],
             "configFiles": [
                 "${workspaceRoot}/openocd.cfg",
                 //"interface/stlink-v2-1.cfg",
                 //"target/stm32l4x.cfg"
             ],
-            "svdFile": "${workspaceRoot}/svd/STM32L496.svd",
+            "svdFile": "${workspaceRoot}/../svd/STM32L496.svd",
             "swoConfig": {
                 "enabled": false,
                 "cpuFrequency": 8000000,

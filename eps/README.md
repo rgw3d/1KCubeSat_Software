@@ -14,11 +14,11 @@ C and C++ based development for STM32 platforms is very well established, and is
 ## Tooling setup with VSCode (Highlevel)
 
 - The Cortex-Debug extension in VSCode provides the wrapper around GDB for debugging and stepping through the code.
-- See [`launch.json`](.vscode/launch.json) for Cortex-Debug launch configurations
-- See [`svd/`](svd/README.md) for SVD register description files for STM32 devices.
+- See [`.vscode/launch.json`](.vscode/launch.json) for Cortex-Debug launch configurations
+- See [`../svd/`](../svd/README.md) for SVD register description files for STM32 devices.
 - OpenOCD is the Debugger, and OpenOCD uses STLink to flash the STM32.
 - OpenOCD opens a port for GDB to connect
-- See [`openocd_cfg/`](openocd_cfg/README.md) for OpenOCD configuration files.
+- See [`../openocd_cfg/`](../openocd_cfg/README.md) for OpenOCD configuration files.
 
 ### Actually getting the above tooling to work
 
