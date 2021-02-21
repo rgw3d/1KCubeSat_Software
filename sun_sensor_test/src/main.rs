@@ -5,11 +5,14 @@
 
 extern crate cortex_m;
 extern crate matrix_helper;
+#[macro_use]
 extern crate nb;
+extern crate arrayvec;
 extern crate rtic;
 extern crate stm32l0xx_hal as hal;
 extern crate void;
 
+use arrayvec::ArrayString;
 use cortex_m_semihosting as _;
 use hal::{prelude::*, serial};
 use panic_semihosting as _;
@@ -19,15 +22,6 @@ const APP: () = {
     struct Resources {
         rx: serial::Rx<serial::USART1>,
         tx: serial::Tx<serial::USART1>,
-
-        //rx_prod: spsc::Producer<'static, u8, U8>,
-        //rx_cons: spsc::Consumer<'static, u8, U8>,
-        //watchdog_done: WatchdogPinType,
-        //led1: gpio::PB2<gpio::Output<gpio::OpenDrain>>,
-        //led2: gpio::PB3<gpio::Output<gpio::OpenDrain>>,
-        //led3: gpio::PB4<gpio::Output<gpio::OpenDrain>>,
-        //led4: gpio::PB5<gpio::Output<gpio::OpenDrain>>,
-        //led5: gpio::PB6<gpio::Output<gpio::OpenDrain>>,
         led1: hal::gpio::gpiob::PB9<hal::gpio::Output<hal::gpio::PushPull>>,
         led2: hal::gpio::gpiob::PB8<hal::gpio::Output<hal::gpio::PushPull>>,
         led3: hal::gpio::gpiob::PB5<hal::gpio::Output<hal::gpio::PushPull>>,
@@ -60,34 +54,8 @@ const APP: () = {
         // Device specific peripherals
         let device: hal::pac::Peripherals = cx.device;
 
-        // Constrain some device peripherials so we can setup the clock config below
-        //let mut flash = device.FLASH.constrain();
+        // Setup Clock config
         let mut rcc = device.RCC.freeze(hal::rcc::Config::hsi16());
-        //let mut pwr = device.PWR.constrain(&mut rcc.apb1r1);
-
-        //// Setup clock config
-        //let rcc_cfgr = rcc
-        //    .cfgr
-        //    .lsi(false)
-        //    .lse(
-        //        hal::rcc::CrystalBypass::Enable,
-        //        hal::rcc::ClockSecuritySystem::Disable,
-        //    )
-        //    .hsi48(false)
-        //    .msi(hal::rcc::MsiFreq::RANGE4M)
-        //    //.sysclk(4.mhz());
-        //    .hclk(4.mhz())
-        //    .pclk1(4.mhz())
-        //    .pclk2(4.mhz());
-
-        //let rcc_reg = unsafe { &*hal::stm32::RCC::ptr() };
-        ////let rcc_reg = unsafe { &*rcc::ptr() };
-        //unsafe {
-        //    rcc_reg.ccipr.write(|w| w.usart3sel().bits(0b11));
-        //}
-
-        //// Freeze the clock configuration
-        //let clocks = rcc_cfgr.freeze(&mut flash.acr, &mut pwr);
 
         // Grab handles to GPIO banks
         let mut gpioa = device.GPIOA.split(&mut rcc);
@@ -129,26 +97,24 @@ const APP: () = {
 
         let serial = device
             .USART1
-            .usart(tx_pin, rx_pin, serial::Config::default(), &mut rcc)
+            .usart(
+                tx_pin,
+                rx_pin,
+                hal::serial::Config::default().baudrate(115200.bps()),
+                &mut rcc,
+            )
             .unwrap();
         let (mut tx, mut rx) = serial.split();
 
-        //// Configure the USART3 pins
-        //let tx_pin = gpiob.pb10.into_af7(&mut gpiob.moder, &mut gpiob.afrh);
-        //let rx_pin = gpiob.pb11.into_af7(&mut gpiob.moder, &mut gpiob.afrh);
-
         //// Send a string over the UART
-        //let sent = b"START\n\r";
-        //for elem in sent {
-        //    block!(tx.write(*elem)).ok();
-        //}
+        let sent = b"START\n\r";
+        for elem in sent {
+            block!(tx.write(*elem)).ok();
+        }
 
         init::LateResources {
             rx,
             tx,
-            //rx_prod,
-            //rx_cons,
-            //watchdog_done,
             led1,
             led2,
             led3,
@@ -192,14 +158,17 @@ const APP: () = {
             cx.resources.led5,
             cx.resources.led8,
             cx.resources.led6,
+            //
             cx.resources.led3,
             cx.resources.led1,
             cx.resources.led4,
             cx.resources.led2,
+            //
             cx.resources.led11,
             cx.resources.led9,
             cx.resources.led12,
             cx.resources.led10,
+            //
             cx.resources.led15,
             cx.resources.led13,
             cx.resources.led16,
@@ -226,30 +195,53 @@ const APP: () = {
         //];
 
         let mut adc_vals: [f32; 16] = [0.0; 16];
-        let mut matrix_a_out: [f32; 48] = [0.0; 48];
+        let mut matrix_a_pseudo_left_inverse: [f32; 48] = [0.0; 48];
         {
             let mut matrix_a: [f32; 48] = [0.0; 48];
+            // Diode-> ADC best fit map
             let adc_coord_map: [(i32, i32); 16] = [
-                (2, 2),
-                (2, 1),
-                (1, 2),
                 (1, 1),
-                //
-                (-1, 2),
-                (-1, 1),
-                (-2, 2),
-                (-2, 1),
-                //
-                (-1, -1),
-                (-1, -2),
-                (-2, -1),
-                (-2, -2),
-                //
-                (2, -1),
+                (1, 2),
+                (2, 1),
                 (2, 2),
-                (1, -1),
+                //
+                (-2, 1),
+                (-2, 2),
+                (-1, 1),
+                (-1, 2),
+                //
+                (-2, -2),
+                (-2, -1),
+                (-1, -2),
+                (-1, -1),
+                //
                 (1, -2),
+                (1, -1),
+                (2, -2),
+                (2, -1),
             ];
+            // Diode-> ADC direct map
+            //let adc_coord_map: [(i32, i32); 16] = [
+            //    (2, 2),
+            //    (2, 1),
+            //    (1, 2),
+            //    (1, 1),
+            //    //
+            //    (-1, 2),
+            //    (-1, 1),
+            //    (-2, 2),
+            //    (-2, 1),
+            //    //
+            //    (-1, -1),
+            //    (-1, -2),
+            //    (-2, -1),
+            //    (-2, -2),
+            //    //
+            //    (2, -1),
+            //    (2, -2),
+            //    (1, -1),
+            //    (1, -2),
+            //];
             // populate matrix a
             for i in 0..16 {
                 let (a, b) = adc_coord_map[i];
@@ -270,7 +262,7 @@ const APP: () = {
             matrix_helper::multiply(
                 &matrix_a_t_mul_inv,
                 &matrix_a_t,
-                &mut matrix_a_out,
+                &mut matrix_a_pseudo_left_inverse,
                 3,
                 3,
                 3,
@@ -278,16 +270,22 @@ const APP: () = {
             );
         }
 
-        // fake pwm led driver garbage
+        // variables for the fake PWM driver for LED visualization
         let mut cutoff: f32 = 0.0;
-        const MAX_CUTOFF: f32 = 4096.0;
-        const STEP: f32 = 400.0;
         let mut min_adc: f32 = 0.0;
         let mut max_adc: f32 = 0.0;
+
+        // main loop, read from ADC
         loop {
-            cutoff = (cutoff + STEP) % MAX_CUTOFF;
-            min_adc = MAX_CUTOFF;
+            // led driver method 2
+            // const MAX_CUTOFF: f32 = 4096.0;
+            // const STEP: f32 = 400.0;
+            // cutoff = (cutoff + STEP) % MAX_CUTOFF;
+
+            min_adc = 4096.0;
             max_adc = 0.0;
+
+            // Collect all 16 samples
             for n in 0..16 {
                 set_analog_mux(
                     n,
@@ -321,13 +319,12 @@ const APP: () = {
                 //}
 
                 // LED driver method 3
-                if (adc_vals[n as usize] < min_adc) {
+                if adc_vals[n as usize] < min_adc {
                     min_adc = adc_vals[n as usize];
                 }
-                if (adc_vals[n as usize] > max_adc) {
+                if adc_vals[n as usize] > max_adc {
                     max_adc = adc_vals[n as usize];
                 }
-                let itrs = (MAX_CUTOFF / STEP) as usize;
                 cutoff = min_adc;
                 let step = (max_adc - min_adc) / 10.0;
                 for _ in 0..10 {
@@ -341,12 +338,36 @@ const APP: () = {
                     }
                 }
             }
-            //    cortex_m::asm::bkpt();
+
             // fit = (A.T * A).I * A.T * b
+            let mut matrix_x: [f32; 3] = [0.0; 3];
+            matrix_helper::multiply(
+                &matrix_a_pseudo_left_inverse,
+                &adc_vals,
+                &mut matrix_x,
+                3,
+                16,
+                16,
+                1,
+            );
+            let mut test_str_buffer = ArrayString::<[u8; 64]>::new();
+            core::fmt::write(
+                &mut test_str_buffer,
+                format_args!(
+                    "a: {0:.5} b: {1:.5} c: {2:.5}\n\r",
+                    matrix_x[0], matrix_x[1], matrix_x[2]
+                ),
+            )
+            .unwrap();
+            for c in test_str_buffer.as_str().bytes() {
+                block!(tx.write(c)).unwrap();
+            }
+            //block!(tx.write('\n' as u8)).unwrap();
+            //block!(tx.write('\r' as u8)).unwrap();
+            //    cortex_m::asm::bkpt();
         }
-        //    //if let Some(b) = rx_queue.dequeue() {
-        //    //    //block!(tx.write(b)).unwrap();
-        //    //}
+        //if let Some(b) = rx_queue.dequeue() {
+        //    //block!(tx.write(b)).unwrap();
         //}
     }
 
