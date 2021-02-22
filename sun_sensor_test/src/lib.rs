@@ -2,6 +2,7 @@
 #![feature(custom_test_frameworks)]
 #![test_runner(crate::test_runner)]
 #![feature(default_free_fn)]
+#![feature(core_intrinsics)]
 
 #[cfg(feature = "std")]
 extern crate std;
@@ -10,6 +11,9 @@ use std::println;
 #[cfg(feature = "std")]
 #[macro_use]
 extern crate assert_float_eq;
+
+extern crate fast_inv_sqrt;
+use fast_inv_sqrt::InvSqrt32;
 
 extern crate transpose;
 
@@ -134,6 +138,10 @@ pub fn matrix_divide_scalar<T: Copy + core::ops::Div<Output = T>>(
             *out.get_unchecked_mut(i) = *out.get_unchecked(i) / scalar;
         }
     }
+}
+
+pub fn inv_magnitude(a: f32, b: f32) -> f32 {
+    (a * a + b * b).inv_sqrt32()
 }
 
 //////
@@ -437,4 +445,13 @@ fn test_left_pseudo_inverse() {
             16,
         );
     }
+}
+
+#[test_case]
+fn test_inv_magnitude() {
+    println!("Start ==== {}", function_name!());
+    let a: f32 = 4.0;
+    let b: f32 = 4.0;
+    let c = inv_magnitude(a, b);
+    assert_f32_near!(c, 0.1767324);
 }

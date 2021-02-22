@@ -275,6 +275,12 @@ const APP: () = {
         let mut min_adc: f32 = 0.0;
         let mut max_adc: f32 = 0.0;
 
+        //
+        const HISTORY_LEN: usize = 10;
+        let mut history_x: [f32; HISTORY_LEN] = [0.0; HISTORY_LEN];
+        let mut history_y: [f32; HISTORY_LEN] = [0.0; HISTORY_LEN];
+        let mut history_itr = 0;
+
         // main loop, read from ADC
         loop {
             // led driver method 2
@@ -294,7 +300,7 @@ const APP: () = {
                     cx.resources.s2,
                     cx.resources.s3,
                 );
-                cortex_m::asm::delay(10);
+                cortex_m::asm::delay(100);
                 adc_vals[n as usize] = cx.resources.adc.read(cx.resources.a3).unwrap();
 
                 // LED Driver Method 1
@@ -350,12 +356,29 @@ const APP: () = {
                 16,
                 1,
             );
-            let mut test_str_buffer = ArrayString::<[u8; 64]>::new();
+            let mut test_str_buffer = ArrayString::<[u8; 128]>::new();
+            let inv_mag = matrix_helper::inv_magnitude(matrix_x[0], matrix_x[1]);
+
+            // Store result in buffer
+            history_itr = (history_itr + 1) % HISTORY_LEN;
+            history_x[history_itr] = matrix_x[0] * inv_mag;
+            history_y[history_itr] = matrix_x[1] * inv_mag;
+
+            // find average
+            let mut x_avg = 0.0;
+            let mut y_avg = 0.0;
+            for i in 0..HISTORY_LEN {
+                x_avg = x_avg + history_x[i];
+                y_avg = y_avg + history_y[i];
+            }
+            x_avg = x_avg / (HISTORY_LEN as f32);
+            y_avg = y_avg / (HISTORY_LEN as f32);
+
             core::fmt::write(
                 &mut test_str_buffer,
                 format_args!(
-                    "a: {0:.5} b: {1:.5} c: {2:.5}\n\r",
-                    matrix_x[0], matrix_x[1], matrix_x[2]
+                    "x: {0:+.5} y: {1:+.5} c: {2:.5}\n\r",
+                    x_avg, y_avg, matrix_x[2]
                 ),
             )
             .unwrap();

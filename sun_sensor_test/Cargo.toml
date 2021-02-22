@@ -32,6 +32,10 @@ default-features = false
 version = "1.1.3"
 optional = true
 
+[dependencies.fast_inv_sqrt]
+git = "https://github.com/rgw3d/rust-fast_inv_sqrt"
+branch = "master"
+
 # this lets you use `cargo fix`!
 [[bin]]
 name = "sun_sensor_test"
