@@ -8,6 +8,7 @@ extern crate matrix_helper;
 #[macro_use]
 extern crate nb;
 extern crate arrayvec;
+extern crate libm;
 extern crate rtic;
 extern crate stm32l0xx_hal as hal;
 extern crate void;
@@ -275,6 +276,9 @@ const APP: () = {
         let mut min_adc: f32 = 0.0;
         let mut max_adc: f32 = 0.0;
 
+        const SERIAL_WRITE_FREQUENCY: usize = 20;
+        let mut serial_write_itr = 0;
+
         //
         const HISTORY_LEN: usize = 10;
         let mut history_x: [f32; HISTORY_LEN] = [0.0; HISTORY_LEN];
@@ -300,7 +304,7 @@ const APP: () = {
                     cx.resources.s2,
                     cx.resources.s3,
                 );
-                cortex_m::asm::delay(100);
+                cortex_m::asm::delay(500);
                 adc_vals[n as usize] = cx.resources.adc.read(cx.resources.a3).unwrap();
 
                 // LED Driver Method 1
@@ -356,15 +360,17 @@ const APP: () = {
                 16,
                 1,
             );
-            let mut test_str_buffer = ArrayString::<[u8; 128]>::new();
-            let inv_mag = matrix_helper::inv_magnitude(matrix_x[0], matrix_x[1]);
-
+            //let inv_mag = matrix_helper::inv_magnitude(matrix_x[0], matrix_x[1]);
+            //let mut normal_vec: [f32; 3] = [matrix_x[0] * inv_mag, matrix_x[1] * inv_mag, -1.0];
+            let mut normal_vec: [f32; 3] =
+                [matrix_x[0], matrix_x[1], -libm::fmaxf(min_adc - 190.0, 1.0)];
+            matrix_helper::normalize_vector(&mut normal_vec);
+            let (radius, theta) = matrix_helper::cartesian_to_polar(normal_vec[0], normal_vec[1]);
             // Store result in buffer
             history_itr = (history_itr + 1) % HISTORY_LEN;
-            history_x[history_itr] = matrix_x[0] * inv_mag;
-            history_y[history_itr] = matrix_x[1] * inv_mag;
-
-            // find average
+            history_x[history_itr] = radius; //matrix_x[0]; // * inv_mag;
+            history_y[history_itr] = theta; //matrix_x[1]; // * inv_mag;
+                                            // find average
             let mut x_avg = 0.0;
             let mut y_avg = 0.0;
             for i in 0..HISTORY_LEN {
@@ -374,16 +380,20 @@ const APP: () = {
             x_avg = x_avg / (HISTORY_LEN as f32);
             y_avg = y_avg / (HISTORY_LEN as f32);
 
-            core::fmt::write(
-                &mut test_str_buffer,
-                format_args!(
-                    "x: {0:+.5} y: {1:+.5} c: {2:.5}\n\r",
-                    x_avg, y_avg, matrix_x[2]
-                ),
-            )
-            .unwrap();
-            for c in test_str_buffer.as_str().bytes() {
-                block!(tx.write(c)).unwrap();
+            let mut test_str_buffer = ArrayString::<[u8; 128]>::new();
+            serial_write_itr = (serial_write_itr + 1) % SERIAL_WRITE_FREQUENCY;
+            if serial_write_itr == 0 {
+                core::fmt::write(
+                    &mut test_str_buffer,
+                    format_args!(
+                        "r: {0:+.5} t: {1:+.5} c: {2:.5} a: {3:.5}\n\r",
+                        x_avg, y_avg, matrix_x[2], min_adc,
+                    ),
+                )
+                .unwrap();
+                for c in test_str_buffer.as_str().bytes() {
+                    block!(tx.write(c)).unwrap();
+                }
             }
             //block!(tx.write('\n' as u8)).unwrap();
             //block!(tx.write('\r' as u8)).unwrap();

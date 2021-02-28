@@ -13,6 +13,7 @@ use std::println;
 extern crate assert_float_eq;
 
 extern crate fast_inv_sqrt;
+extern crate libm;
 use fast_inv_sqrt::InvSqrt32;
 
 extern crate transpose;
@@ -142,6 +143,27 @@ pub fn matrix_divide_scalar<T: Copy + core::ops::Div<Output = T>>(
 
 pub fn inv_magnitude(a: f32, b: f32) -> f32 {
     (a * a + b * b).inv_sqrt32()
+}
+
+pub fn normalize_vector(out: &mut [f32; 3]) {
+    let mag = libm::sqrtf(out[0] * out[0] + out[1] * out[1] + out[2] * out[2]);
+    matrix_divide_scalar(out, mag, 3, 1);
+}
+
+pub fn cartesian_to_polar(x: f32, y: f32) -> (f32, f32) {
+    let radius = libm::sqrtf(x * x + y * y);
+    let mut theta;
+    if (x == 0.0) {
+        theta = 90.0;
+    } else {
+        theta = libm::atanf(y / x) * 180.0 / 3.1415926535;
+        if (x < 0.0) {
+            theta = theta + 180.0;
+        } else if (x > 0.0 && y < 0.0) {
+            theta = theta + 360.0;
+        }
+    }
+    (radius, theta)
 }
 
 //////
