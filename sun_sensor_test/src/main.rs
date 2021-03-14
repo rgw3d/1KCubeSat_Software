@@ -176,29 +176,32 @@ const APP: () = {
             cx.resources.led14,
         ];
         // Maps directly to LED's
-        //let led_array: [&mut dyn OutputPin<Error = void::Void>; 16] = [
-        //    cx.resources.led6,
-        //    cx.resources.led8,
-        //    cx.resources.led5,
-        //    cx.resources.led7,
-        //    cx.resources.led2,
-        //    cx.resources.led4,
-        //    cx.resources.led1,
-        //    cx.resources.led3,
-        //    cx.resources.led10,
-        //    cx.resources.led12,
-        //    cx.resources.led9,
-        //    cx.resources.led11,
-        //    cx.resources.led14,
-        //    cx.resources.led16,
-        //    cx.resources.led13,
-        //    cx.resources.led15,
-        //];
+        // let led_array: [&mut dyn OutputPin<Error = void::Void>; 16] = [
+        //     cx.resources.led6,
+        //     cx.resources.led8,
+        //     cx.resources.led5,
+        //     cx.resources.led7,
+        //     cx.resources.led2,
+        //     cx.resources.led4,
+        //     cx.resources.led1,
+        //     cx.resources.led3,
+        //     cx.resources.led10,
+        //     cx.resources.led12,
+        //     cx.resources.led9,
+        //     cx.resources.led11,
+        //     cx.resources.led14,
+        //     cx.resources.led16,
+        //     cx.resources.led13,
+        //     cx.resources.led15,
+        // ];
 
         let mut adc_vals: [f32; 16] = [0.0; 16];
         let mut matrix_a_pseudo_left_inverse: [f32; 48] = [0.0; 48];
         {
+            // We populate Matrix A to use in the best fit calculation later
+            // fit = (A.T * A).I * A.T * b
             let mut matrix_a: [f32; 48] = [0.0; 48];
+
             // Diode-> ADC best fit map
             let adc_coord_map: [(i32, i32); 16] = [
                 (1, 1),
@@ -222,27 +225,28 @@ const APP: () = {
                 (2, -1),
             ];
             // Diode-> ADC direct map
-            //let adc_coord_map: [(i32, i32); 16] = [
-            //    (2, 2),
-            //    (2, 1),
-            //    (1, 2),
-            //    (1, 1),
-            //    //
-            //    (-1, 2),
-            //    (-1, 1),
-            //    (-2, 2),
-            //    (-2, 1),
-            //    //
-            //    (-1, -1),
-            //    (-1, -2),
-            //    (-2, -1),
-            //    (-2, -2),
-            //    //
-            //    (2, -1),
-            //    (2, -2),
-            //    (1, -1),
-            //    (1, -2),
-            //];
+            // let adc_coord_map: [(i32, i32); 16] = [
+            //     (2, 2),
+            //     (2, 1),
+            //     (1, 2),
+            //     (1, 1),
+            //     //
+            //     (-1, 2),
+            //     (-1, 1),
+            //     (-2, 2),
+            //     (-2, 1),
+            //     //
+            //     (-1, -1),
+            //     (-1, -2),
+            //     (-2, -1),
+            //     (-2, -2),
+            //     //
+            //     (2, -1),
+            //     (2, -2),
+            //     (1, -1),
+            //     (1, -2),
+            // ];
+            //
             // populate matrix a
             for i in 0..16 {
                 let (a, b) = adc_coord_map[i];
@@ -251,6 +255,8 @@ const APP: () = {
                 matrix_a[(i * 3) + 2] = 1.0;
             }
 
+            // fit = (A.T * A).I * A.T * b
+            // This Pre-calculates (A.T * A).I * A.T
             let mut matrix_a_t: [f32; 48] = [0.0; 48];
             matrix_helper::matrix_transpose(&matrix_a, &mut matrix_a_t, 16, 3);
             let mut matrix_tmp: [f32; 9] = [0.0; 9];
@@ -276,18 +282,22 @@ const APP: () = {
         let mut min_adc: f32 = 0.0;
         let mut max_adc: f32 = 0.0;
 
-        const SERIAL_WRITE_FREQUENCY: usize = 20;
+        // How frequenty to print to the UART
+        const SERIAL_WRITE_FREQUENCY: usize = 80000;
         let mut serial_write_itr = 0;
 
-        //
-        const HISTORY_LEN: usize = 10;
-        let mut history_x: [f32; HISTORY_LEN] = [0.0; HISTORY_LEN];
-        let mut history_y: [f32; HISTORY_LEN] = [0.0; HISTORY_LEN];
+        // Used for averaging
+        const HISTORY_LEN: usize = 20;
+        let mut history_a: [f32; HISTORY_LEN] = [0.0; HISTORY_LEN];
+        let mut history_b: [f32; HISTORY_LEN] = [0.0; HISTORY_LEN];
         let mut history_itr = 0;
+
+        const ENABLE_LEDS: bool = true;
 
         // main loop, read from ADC
         loop {
             // led driver method 2
+            // See below for more information
             // const MAX_CUTOFF: f32 = 4096.0;
             // const STEP: f32 = 400.0;
             // cutoff = (cutoff + STEP) % MAX_CUTOFF;
@@ -304,8 +314,18 @@ const APP: () = {
                     cx.resources.s2,
                     cx.resources.s3,
                 );
-                cortex_m::asm::delay(500);
+                cortex_m::asm::delay(200);
                 adc_vals[n as usize] = cx.resources.adc.read(cx.resources.a3).unwrap();
+
+                // NOTE: This doesn't seem to do anything.
+                // clear analog channel.
+                //cx.resources.en.set_high().ok(); // disable mux
+                //cortex_m::asm::delay(10);
+                //let _unused: u32 = cx.resources.adc.read(cx.resources.a3).unwrap(); // read ADC
+                //let _unused: u32 = cx.resources.adc.read(cx.resources.a3).unwrap(); // read ADC
+                //let _unused: u32 = cx.resources.adc.read(cx.resources.a3).unwrap();
+                //cortex_m::asm::delay(10);
+                //cx.resources.en.set_low().ok(); // re-enable mux
 
                 // LED Driver Method 1
                 //if adc_vals[n as usize] > cutoff {
@@ -335,20 +355,23 @@ const APP: () = {
                 if adc_vals[n as usize] > max_adc {
                     max_adc = adc_vals[n as usize];
                 }
-                cutoff = min_adc;
-                let step = (max_adc - min_adc) / 10.0;
-                for _ in 0..10 {
-                    cutoff = cutoff + step;
-                    for x in 0..16 {
-                        if adc_vals[x as usize] >= cutoff {
-                            led_array[x as usize].set_high().ok();
-                        } else {
-                            led_array[x as usize].set_low().ok();
+                if ENABLE_LEDS {
+                    cutoff = min_adc;
+                    let step = (max_adc - min_adc) / 10.0;
+                    for _ in 0..10 {
+                        cutoff = cutoff + step;
+                        for x in 0..16 {
+                            if adc_vals[x as usize] >= cutoff {
+                                led_array[x as usize].set_high().ok();
+                            } else {
+                                led_array[x as usize].set_low().ok();
+                            }
                         }
                     }
                 }
             }
 
+            // Multiple pseudo left inverse and b
             // fit = (A.T * A).I * A.T * b
             let mut matrix_x: [f32; 3] = [0.0; 3];
             matrix_helper::multiply(
@@ -362,69 +385,58 @@ const APP: () = {
             );
             //let inv_mag = matrix_helper::inv_magnitude(matrix_x[0], matrix_x[1]);
             //let mut normal_vec: [f32; 3] = [matrix_x[0] * inv_mag, matrix_x[1] * inv_mag, -1.0];
+
+            // Get the normal vector. What's special here is that the z value is the minimum ADC value (Which probably makes this not exactly a normal vector)
+            // (I subtract a constant from the minimum ADC value to remove the no-light offset from the readings. And I make sure it is at least 1)
+            // If the z value is just (-1.0) You will get bad heading values.
+            // In other words, the z value must be dependent on the ammount of light received, since the x & y sizes are also dependent on the ammount of light seen.
             let mut normal_vec: [f32; 3] =
                 [matrix_x[0], matrix_x[1], -libm::fmaxf(min_adc - 190.0, 1.0)];
+
+            // Normalize the vector
             matrix_helper::normalize_vector(&mut normal_vec);
+
+            // Project onto the X-Y plane (just take the x & y values)
+            // Convert to polar for an easier to understand value
             let (radius, theta) = matrix_helper::cartesian_to_polar(normal_vec[0], normal_vec[1]);
+
             // Store result in buffer
             history_itr = (history_itr + 1) % HISTORY_LEN;
-            history_x[history_itr] = radius; //matrix_x[0]; // * inv_mag;
-            history_y[history_itr] = theta; //matrix_x[1]; // * inv_mag;
-                                            // find average
-            let mut x_avg = 0.0;
-            let mut y_avg = 0.0;
+            history_a[history_itr] = radius;
+            history_b[history_itr] = theta;
+            // Find average
+            let mut a_avg = 0.0;
+            let mut b_avg = 0.0;
             for i in 0..HISTORY_LEN {
-                x_avg = x_avg + history_x[i];
-                y_avg = y_avg + history_y[i];
+                a_avg = a_avg + history_a[i];
+                b_avg = b_avg + history_b[i];
             }
-            x_avg = x_avg / (HISTORY_LEN as f32);
-            y_avg = y_avg / (HISTORY_LEN as f32);
+            a_avg = a_avg / (HISTORY_LEN as f32);
+            b_avg = b_avg / (HISTORY_LEN as f32);
 
+            // Create string buffer that we will print out over UART
             let mut test_str_buffer = ArrayString::<[u8; 128]>::new();
+            // Only write occasionally based on SERIAL_WRITE_FREQUENCY
             serial_write_itr = (serial_write_itr + 1) % SERIAL_WRITE_FREQUENCY;
             if serial_write_itr == 0 {
+                // Populate string buffer
                 core::fmt::write(
                     &mut test_str_buffer,
                     format_args!(
                         "r: {0:+.5} t: {1:+.5} c: {2:.5} a: {3:.5}\n\r",
-                        x_avg, y_avg, matrix_x[2], min_adc,
+                        a_avg, b_avg, matrix_x[2], min_adc,
                     ),
                 )
                 .unwrap();
+
+                // Write string buffer out to UART
                 for c in test_str_buffer.as_str().bytes() {
                     block!(tx.write(c)).unwrap();
                 }
             }
-            //block!(tx.write('\n' as u8)).unwrap();
-            //block!(tx.write('\r' as u8)).unwrap();
             //    cortex_m::asm::bkpt();
         }
-        //if let Some(b) = rx_queue.dequeue() {
-        //    //block!(tx.write(b)).unwrap();
-        //}
     }
-
-    //#[task(binds = USART3, resources = [rx, rx_prod, led5], priority = 3)]
-    //fn usart3(cx: usart3::Context) {
-    //    cx.resources.led5.set_high().ok();
-    //    let rx = cx.resources.rx;
-    //    let queue = cx.resources.rx_prod;
-
-    //    let b = match rx.read() {
-    //        Ok(b) => b,
-    //        Err(_err) => b'x',
-    //    };
-    //    match queue.enqueue(b) {
-    //        Ok(()) => (),
-    //        Err(_err) => {}
-    //    }
-    //}
-
-    //extern "C" {
-
-    //    // I think any of the interupts work??
-    //    //fn I2C2();
-    //}
 };
 
 fn set_analog_mux(
