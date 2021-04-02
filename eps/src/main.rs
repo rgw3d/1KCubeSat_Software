@@ -9,31 +9,27 @@ extern crate rtic;
 extern crate stm32l4xx_hal as hal;
 
 use cortex_m_semihosting as _;
-use hal::{gpio, prelude::*, serial, serial::Serial, stm32::USART3};
+use hal::{gpio, prelude::*, serial, serial::Serial, stm32::UART4, stm32::USART3};
 use panic_semihosting as _;
 
 use heapless::{consts::U8, spsc};
 use nb::block;
 use rtic::cyccnt::U32Ext as _;
 
+mod eps;
+
 const BLINK_PERIOD: u32 = 4_000_000;
-type WatchdogPinType = gpio::PE0<gpio::Output<gpio::PushPull>>;
+//type WatchdogPinType<'a> = &'a mut dyn hal::prelude::OutputPin<Error = Infallible>;
+//type WatchdogPinType = impl hal::prelude::outputPin<Error = Infallible>;
 
 #[rtic::app(device = hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
-        rx: serial::Rx<USART3>,
-        tx: serial::Tx<USART3>,
-
         rx_prod: spsc::Producer<'static, u8, U8>,
         rx_cons: spsc::Consumer<'static, u8, U8>,
-
-        watchdog_done: WatchdogPinType,
-        led1: gpio::PF2<gpio::Output<gpio::OpenDrain>>,
-        led2: gpio::PF3<gpio::Output<gpio::OpenDrain>>,
-        led3: gpio::PF4<gpio::Output<gpio::OpenDrain>>,
-        led4: gpio::PF5<gpio::Output<gpio::OpenDrain>>,
-        led5: gpio::PF6<gpio::Output<gpio::OpenDrain>>,
+        eps: eps::EPS,
+        //digital_pins: eps::DigitalPins,
+        //analog_pins: eps::AnalogPins,
     }
 
     #[init (schedule = [blinker], spawn = [blinker])]
@@ -42,103 +38,19 @@ const APP: () = {
 
         // Cortex-M peripherals
         let mut core = cx.core;
-        // Device specific peripherals
-        let device: hal::stm32::Peripherals = cx.device;
-
         // Setup (initialize) the monotonic timer CYCCNT
         core.DWT.enable_cycle_counter();
 
-        // Constrain some device peripherials so we can setup the clock config below
-        let mut flash = device.FLASH.constrain();
-        let mut rcc = device.RCC.constrain();
-        let mut pwr = device.PWR.constrain(&mut rcc.apb1r1);
+        // Device specific peripherals
+        let device: hal::stm32::Peripherals = cx.device;
 
-        // Setup clock config
-        let rcc_cfgr = rcc
-            .cfgr
-            .lsi(false)
-            .lse(
-                hal::rcc::CrystalBypass::Enable,
-                hal::rcc::ClockSecuritySystem::Disable,
-            )
-            .hsi48(false)
-            .msi(hal::rcc::MsiFreq::RANGE4M)
-            //.sysclk(4.mhz());
-            .hclk(4.mhz())
-            .pclk1(4.mhz())
-            .pclk2(4.mhz());
+        // Do the bulk of our initilization
+        let mut eps = eps::EPS::init(device);
 
-        let rcc_reg = unsafe { &*hal::stm32::RCC::ptr() };
-        //let rcc_reg = unsafe { &*rcc::ptr() };
-        unsafe {
-            rcc_reg.ccipr.write(|w| w.usart3sel().bits(0b11));
-        }
-
-        // Freeze the clock configuration
-        let clocks = rcc_cfgr.freeze(&mut flash.acr, &mut pwr);
-
-        // Grab handles to GPIO banks
-        let mut gpiob = device.GPIOB.split(&mut rcc.ahb2);
-        let mut gpioe = device.GPIOE.split(&mut rcc.ahb2);
-        let mut gpiof = device.GPIOF.split(&mut rcc.ahb2);
-
-        // Configure the watchdog pin
-        let mut watchdog_done = gpioe
-            .pe0
-            .into_push_pull_output(&mut gpioe.moder, &mut gpioe.otyper);
-        pet_watchdog(&mut watchdog_done);
-
-        // Configure the LED1 pin
-        let mut led1 = gpiof
-            .pf2
-            .into_open_drain_output(&mut gpiof.moder, &mut gpiof.otyper);
-        led1.set_high().ok();
-
-        // Configure the LED2 pin
-        let mut led2 = gpiof
-            .pf3
-            .into_open_drain_output(&mut gpiof.moder, &mut gpiof.otyper);
-        led2.set_high().ok();
-
-        // Configure the LED3 pin
-        let led3 = gpiof
-            .pf4
-            .into_open_drain_output(&mut gpiof.moder, &mut gpiof.otyper);
-
-        // Configure the LED4 pin
-        let led4 = gpiof
-            .pf5
-            .into_open_drain_output(&mut gpiof.moder, &mut gpiof.otyper);
-
-        // Configure the LED5 pin
-        let mut led5 = gpiof
-            .pf6
-            .into_open_drain_output(&mut gpiof.moder, &mut gpiof.otyper);
-        led5.set_low().ok();
-
-        // Configure the USART3 pins
-        let tx_pin = gpiob.pb10.into_af7(&mut gpiob.moder, &mut gpiob.afrh);
-        let rx_pin = gpiob.pb11.into_af7(&mut gpiob.moder, &mut gpiob.afrh);
-
-        // Setup the Serial abstraction
-        let mut serial = Serial::usart3(
-            device.USART3,
-            (tx_pin, rx_pin),
-            serial::Config::default()
-                .baudrate(2_400.bps())
-                .oversampling(serial::Oversampling::Over8),
-            clocks,
-            &mut rcc.apb1r1,
-        );
-        serial.listen(serial::Event::Rxne);
-
-        // Create the tx & rx handles
-        let (mut tx, rx) = serial.split();
-
-        // Send a string over the UART
+        // Send a string over the debug UART
         let sent = b"START\n\r";
         for elem in sent {
-            block!(tx.write(*elem)).ok();
+            block!(eps.debug_tx.write(*elem)).ok();
         }
 
         // Create the producer and consumer sides of the Queue
@@ -150,25 +62,24 @@ const APP: () = {
             .unwrap();
 
         init::LateResources {
-            rx,
-            tx,
-            rx_prod,
-            rx_cons,
-            watchdog_done,
-            led1,
-            led2,
-            led3,
-            led4,
-            led5,
+            rx_prod: rx_prod,
+            rx_cons: rx_cons,
+            eps,
+            //debug_tx: debug_tx,
+            //debug_rx: debug_rx,
+            //conn_tx: conn_tx,
+            //conn_rx: conn_rx,
+            //digital_pins: digital_pins,
+            //analog_pins: analog_pins,
         }
     }
 
-    #[idle(resources = [tx, rx_cons, watchdog_done, led2, led3, led4])]
+    #[idle(resources = [])]
     fn idle(mut cx: idle::Context) -> ! {
-        let rx_queue = cx.resources.rx_cons;
-        let tx = cx.resources.tx;
+        //let rx_queue = cx.resources.rx_cons;
+        //let tx = cx.resources.tx;
         loop {
-            pet_watchdog(&mut cx.resources.watchdog_done);
+            ////pet_watchdog(cx.resources.watchdog_done);
             //cx.resources.led1.set_low().ok();
             //cx.resources.led2.set_low().ok();
             //cx.resources.led3.set_low().ok();
@@ -183,39 +94,39 @@ const APP: () = {
 
             //cortex_m::asm::delay(1000000);
 
-            if let Some(b) = rx_queue.dequeue() {
-                block!(tx.write(b)).unwrap();
-            }
+            //if let Some(b) = rx_queue.dequeue() {
+            //    block!(tx.write(b)).unwrap();
+            //}
         }
     }
 
-    #[task(binds = USART3, resources = [rx, rx_prod, led5], priority = 3)]
+    #[task(binds = USART3, resources = [], priority = 3)]
     fn usart3(cx: usart3::Context) {
-        cx.resources.led5.set_high().ok();
-        let rx = cx.resources.rx;
-        let queue = cx.resources.rx_prod;
+        //cx.resources.led5.set_high().ok();
+        //let rx = cx.resources.rx;
+        //let queue = cx.resources.rx_prod;
 
-        let b = match rx.read() {
-            Ok(b) => b,
-            Err(_err) => b'x',
-        };
-        match queue.enqueue(b) {
-            Ok(()) => (),
-            Err(_err) => {}
-        }
+        //let b = match rx.read() {
+        //    Ok(b) => b,
+        //    Err(_err) => b'x',
+        //};
+        //match queue.enqueue(b) {
+        //    Ok(()) => (),
+        //    Err(_err) => {}
+        //}
     }
 
-    #[task(resources = [led1], schedule = [blinker], priority = 1)]
+    #[task(resources = [], schedule = [blinker], priority = 1)]
     fn blinker(cx: blinker::Context) {
         static mut LED_STATE: bool = false;
 
         //cortex_m::asm::bkpt();
 
         if *LED_STATE == true {
-            cx.resources.led1.set_low().ok();
+            //cx.resources.led1.set_low().ok();
             *LED_STATE = false;
         } else {
-            cx.resources.led1.set_high().ok();
+            //cx.resources.led1.set_high().ok();
             *LED_STATE = true;
         }
 
@@ -232,7 +143,9 @@ const APP: () = {
     }
 };
 
-fn pet_watchdog(watchdog_done: &mut WatchdogPinType) {
+//fn pet_watchdog(watchdog_done: &mut WatchdogPinType) {
+//fn pet_watchdog<'a>(watchdog_done: &'a mut hal::prelude::OutputPin<Error = Infallible>) {
+fn pet_watchdog(watchdog_done: &mut impl hal::prelude::OutputPin) {
     // Pet the watchdog with a low to high transition
     watchdog_done.set_high().ok();
     watchdog_done.set_low().ok();
