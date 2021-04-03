@@ -47,3 +47,7 @@ features = ["stm32l4x6", "rt"]
 version = "^0.6.0"
 git = "https://github.com/stm32-rs/stm32l4xx-hal.git"
 features = ["stm32l4x6", "rt"]
+
+[dependencies.arrayvec]
+version = "^0.7.0"
+default-features = false

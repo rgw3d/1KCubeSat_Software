@@ -1,5 +1,11 @@
 extern crate stm32l4xx_hal as hal;
-use hal::{gpio, prelude::*, serial, serial::Serial, stm32::UART4, stm32::USART3};
+use hal::{adc, delay, gpio, prelude::*, serial, serial::Serial, stm32::UART4, stm32::USART3};
+
+pub enum BMState {
+    Suspended,
+    LowPower,
+    HighPower,
+}
 
 pub struct EPS {
     //device: hal::stm32::Peripherals,
@@ -16,6 +22,7 @@ pub struct EPS {
     pub led4: gpio::PF5<gpio::Output<gpio::OpenDrain>>,
     pub led5: gpio::PF6<gpio::Output<gpio::OpenDrain>>,
     pub watchdog_done: gpio::PE0<gpio::Output<gpio::PushPull>>,
+    pub adc: adc::ADC,
 }
 
 struct GpioBankParts {
@@ -36,12 +43,14 @@ pub struct DigitalPins {
     pub btm1_shdn: gpio::PD3<gpio::Output<gpio::PushPull>>,
     pub btm1_susp: gpio::PD7<gpio::Output<gpio::PushPull>>,
     pub btm1_pol: gpio::PD9<gpio::Input<gpio::Floating>>,
-    //btm1_hpwr isn't connected yet. It is an output
+    pub btm1_hpwr: gpio::PC8<gpio::Output<gpio::PushPull>>,
+
     pub btm2_chrg: gpio::PD2<gpio::Input<gpio::Floating>>,
     pub btm2_shdn: gpio::PD4<gpio::Output<gpio::PushPull>>,
     pub btm2_susp: gpio::PD8<gpio::Output<gpio::PushPull>>,
     pub btm2_pol: gpio::PD10<gpio::Input<gpio::Floating>>,
-    //hpwr isn't connected yet. It is an output
+    pub btm2_hpwr: gpio::PC9<gpio::Output<gpio::PushPull>>,
+
     pub pg_solar: gpio::PD0<gpio::Input<gpio::Floating>>,
     pub pg_3v3: gpio::PD13<gpio::Input<gpio::Floating>>,
 
@@ -108,6 +117,11 @@ impl EPS {
         // Freeze the clock configuration
         let clocks = rcc_cfgr.freeze(&mut flash.acr, &mut pwr);
 
+        // Must use DelayCM here
+        // Can't use SYSTIC because RTIC already consumes SYSTIC
+        let mut delay = delay::DelayCM::new(clocks);
+        let adc = adc::ADC::new(device.ADC1, &mut rcc.ahb2, &mut rcc.ccipr, &mut delay);
+
         // Grab handles to GPIO banks
         let mut bank = GpioBankParts {
             gpioa: device.GPIOA.split(&mut rcc.ahb2),
@@ -168,16 +182,21 @@ impl EPS {
                 .pd3
                 .into_push_pull_output(&mut bank.gpiod.moder, &mut bank.gpiod.otyper),
 
-            btm1_susp: bank
-                .gpiod
-                .pd7
-                .into_push_pull_output(&mut bank.gpiod.moder, &mut bank.gpiod.otyper),
+            btm1_susp: bank.gpiod.pd7.into_push_pull_output_with_state(
+                &mut bank.gpiod.moder,
+                &mut bank.gpiod.otyper,
+                gpio::State::Low,
+            ),
 
             btm1_pol: bank
                 .gpiod
                 .pd9
                 .into_floating_input(&mut bank.gpiod.moder, &mut bank.gpiod.pupdr),
-            //btm1_hpwr isn't connected yet. It is an output
+            btm1_hpwr: bank.gpioc.pc8.into_push_pull_output_with_state(
+                &mut bank.gpioc.moder,
+                &mut bank.gpioc.otyper,
+                gpio::State::Low,
+            ),
             btm2_chrg: bank
                 .gpiod
                 .pd2
@@ -186,15 +205,20 @@ impl EPS {
                 .gpiod
                 .pd4
                 .into_push_pull_output(&mut bank.gpiod.moder, &mut bank.gpiod.otyper),
-            btm2_susp: bank
-                .gpiod
-                .pd8
-                .into_push_pull_output(&mut bank.gpiod.moder, &mut bank.gpiod.otyper),
+            btm2_susp: bank.gpiod.pd8.into_push_pull_output_with_state(
+                &mut bank.gpiod.moder,
+                &mut bank.gpiod.otyper,
+                gpio::State::Low,
+            ),
             btm2_pol: bank
                 .gpiod
                 .pd10
                 .into_floating_input(&mut bank.gpiod.moder, &mut bank.gpiod.pupdr),
-            //hpwr isn't connected yet. It is an output
+            btm2_hpwr: bank.gpioc.pc9.into_push_pull_output_with_state(
+                &mut bank.gpioc.moder,
+                &mut bank.gpioc.otyper,
+                gpio::State::Low,
+            ),
             pg_solar: bank
                 .gpiod
                 .pd0
@@ -377,6 +401,7 @@ impl EPS {
             led4,
             led5,
             watchdog_done,
+            adc,
         }
     }
 }
