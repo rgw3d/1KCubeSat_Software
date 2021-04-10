@@ -1,10 +1,19 @@
 extern crate stm32l4xx_hal as hal;
 use hal::{adc, delay, gpio, prelude::*, serial, serial::Serial, stm32::UART4, stm32::USART3};
 
+#[derive(core::fmt::Debug)]
 pub enum BMState {
     Suspended,
     LowPower,
     HighPower,
+}
+
+#[derive(core::fmt::Debug, core::cmp::PartialEq)]
+pub enum BVState {
+    BothHigh,
+    B1HighB2Low,
+    B1LowB2High,
+    BothLow,
 }
 
 pub struct EPS {
@@ -23,6 +32,8 @@ pub struct EPS {
     pub led5: gpio::PF6<gpio::Output<gpio::OpenDrain>>,
     pub watchdog_done: gpio::PE0<gpio::Output<gpio::PushPull>>,
     pub adc: adc::ADC,
+    pub vref: adc::Vref,
+    pub delay: delay::DelayCM,
 }
 
 struct GpioBankParts {
@@ -36,7 +47,7 @@ struct GpioBankParts {
 
 pub struct DigitalPins {
     pub hpwr_en: gpio::PD12<gpio::Output<gpio::PushPull>>,
-    pub ideal_en1: gpio::PD14<gpio::Output<gpio::OpenDrain>>,
+    pub ideal_en1: gpio::PD14<gpio::Output<gpio::PushPull>>,
     pub ideal_en2: gpio::PD15<gpio::Output<gpio::PushPull>>,
 
     pub btm1_chrg: gpio::PD1<gpio::Input<gpio::Floating>>,
@@ -120,7 +131,15 @@ impl EPS {
         // Must use DelayCM here
         // Can't use SYSTIC because RTIC already consumes SYSTIC
         let mut delay = delay::DelayCM::new(clocks);
-        let adc = adc::ADC::new(device.ADC1, &mut rcc.ahb2, &mut rcc.ccipr, &mut delay);
+        let mut adc = adc::ADC::new(
+            device.ADC1,
+            device.ADC_COMMON,
+            &mut rcc.ahb2,
+            &mut rcc.ccipr,
+            &mut delay,
+        );
+
+        let vref = adc.enable_vref(&mut delay);
 
         // Grab handles to GPIO banks
         let mut bank = GpioBankParts {
@@ -163,14 +182,16 @@ impl EPS {
                 .pd12
                 .into_push_pull_output(&mut bank.gpiod.moder, &mut bank.gpiod.otyper),
 
-            ideal_en1: bank
-                .gpiod
-                .pd14
-                .into_open_drain_output(&mut bank.gpiod.moder, &mut bank.gpiod.otyper),
-            ideal_en2: bank
-                .gpiod
-                .pd15
-                .into_push_pull_output(&mut bank.gpiod.moder, &mut bank.gpiod.otyper),
+            ideal_en1: bank.gpiod.pd14.into_push_pull_output_with_state(
+                &mut bank.gpiod.moder,
+                &mut bank.gpiod.otyper,
+                gpio::State::High,
+            ),
+            ideal_en2: bank.gpiod.pd15.into_push_pull_output_with_state(
+                &mut bank.gpiod.moder,
+                &mut bank.gpiod.otyper,
+                gpio::State::Low,
+            ),
 
             btm1_chrg: bank
                 .gpiod
@@ -402,6 +423,8 @@ impl EPS {
             led5,
             watchdog_done,
             adc,
+            vref,
+            delay,
         }
     }
 }

@@ -44,8 +44,9 @@ version = "^0.12.1"
 features = ["stm32l4x6", "rt"]
 
 [dependencies.stm32l4xx-hal]
-version = "^0.6.0"
+#version = "^0.6.0"
 git = "https://github.com/stm32-rs/stm32l4xx-hal.git"
+branch = "master"
 features = ["stm32l4x6", "rt"]
 
 [dependencies.arrayvec]
