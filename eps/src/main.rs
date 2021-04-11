@@ -29,9 +29,9 @@ const ADC_MAX_VOLTAGE: f32 = 3.3;
 // Calculate Low battery voltage limit
 const BATTERY_VOLTAGE_LOWER_LIMIT_VOLTS: f32 = 3.0;
 const BATTERY_DIVIDER_RATIO: f32 = 0.6;
-const BATTERY_VOTLAGE_LOWER_LIMIT: u16 = (BATTERY_VOLTAGE_LOWER_LIMIT_VOLTS * BATTERY_DIVIDER_RATIO
-    / ADC_MAX_VOLTAGE
-    * ADC_NUM_STEPS) as u16;
+const BATTERY_ADC_VOLTS_TO_COUNTS: f32 = BATTERY_DIVIDER_RATIO / ADC_MAX_VOLTAGE * ADC_NUM_STEPS;
+const BATTERY_ADC_COUNTS_TO_VOLTS: f32 = 1.0 / BATTERY_ADC_VOLTS_TO_COUNTS; 
+const BATTERY_VOTLAGE_LOWER_LIMIT: u16 = (BATTERY_VOLTAGE_LOWER_LIMIT_VOLTS * BATTERY_ADC_VOLTS_TO_COUNTS) as u16;
 // Low battery voltage hysteresis
 const LOW_BATTERY_HYSTERESIS_VOLTS: f32 = 0.1;
 const LOW_BATTERY_HYSTERESIS: u16 =
@@ -84,7 +84,7 @@ const APP: () = {
         eps.led4.set_high().ok();
 
         // Send a string over the debug UART
-        let sent = b"START\n\r";
+        let sent = b"\n\rSTART\n\r";
         for elem in sent {
             block!(eps.debug_tx.write(*elem)).ok();
         }
@@ -144,6 +144,7 @@ const APP: () = {
             // 1)
             // Measure state & save it somewhere
             adc.calibrate(vref);
+            adc.set_sample_time(adc::SampleTime::Cycles47_5);
             let battery1 = adc.read(&mut analog_pins.battery1).unwrap();
             let battery2 = adc.read(&mut analog_pins.battery2).unwrap();
             let solar1 = adc.read(&mut analog_pins.solar1).unwrap();
@@ -152,7 +153,7 @@ const APP: () = {
             let solar4 = adc.read(&mut analog_pins.solar4).unwrap();
             let solar5 = adc.read(&mut analog_pins.solar5).unwrap();
             let solar6 = adc.read(&mut analog_pins.solar6).unwrap();
-            let vref_sample = adc.read(vref).unwrap();
+
             let pg_solar = digital_pins.pg_solar.is_high().unwrap();
             let _pg_3v3 = digital_pins.pg_3v3.is_high().unwrap();
 
@@ -208,12 +209,13 @@ const APP: () = {
             //
             // 4)
             // Process & respond to commands
-            let mut test_str_buffer = ArrayString::<128>::new();
+            let mut test_str_buffer = ArrayString::<256>::new();
             core::fmt::write(
                 &mut test_str_buffer,
                 format_args!(
-                    "b1: {} b2: {} pg_s: {} state: {:?} \n\r  s1:{} s2:{} s3:{} s4:{} s5:{} s6:{} vref:{} \n\r",
-                    battery1, battery2, pg_solar, battery_manager_state, solar1, solar2, solar3, solar4, solar5, solar6, vref_sample
+                    "b1: {:.2} b2: {:.2} pg_s: {} state: {:?} bvstate: {:?}\n\r  s1:{} s2:{} s3:{} s4:{} s5:{} s6:{}\n\r",
+                    battery1 as f32 *BATTERY_ADC_COUNTS_TO_VOLTS, battery2 as f32 *BATTERY_ADC_COUNTS_TO_VOLTS, 
+                    pg_solar, battery_manager_state, battery_voltage_state, solar1, solar2, solar3, solar4, solar5, solar6 
                 ),
             )
             .unwrap();
@@ -239,7 +241,7 @@ const APP: () = {
             //
             // 6)
             // Sleep
-            delay.delay_ms(500u32);
+            delay.delay_ms(250u32);
         }
     }
 
