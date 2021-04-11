@@ -6,14 +6,15 @@ name = "eps"
 version = "0.1.0"
 
 [dependencies]
-cortex-m = "0.6.0"
-cortex-m-rt = "0.6.10"
+cortex-m = "0.6.3"
+cortex-m-rt = "0.6.12"
 cortex-m-semihosting = "0.3.3"
 cortex-m-rtic = "^0.5.5"
 # panic-halt = "0.2.0"
 panic-semihosting = "^0.5.6"
-heapless = "^0.5.6"
-nb = "^0.1.1"
+heapless = "^0.6.1"
+nb = "1.0.0"
+alloc-cortex-m = "0.4.1"
 
 # Uncomment for the panic example.
 # panic-itm = "0.4.1"
@@ -40,7 +41,7 @@ debug = true # symbols are nice and they don't increase the size on Flash
 lto = true # better optimizations
 
 [dependencies.stm32l4]
-version = "^0.12.1"
+version = "0.13.0"
 features = ["stm32l4x6", "rt"]
 
 [dependencies.stm32l4xx-hal]
@@ -52,4 +53,8 @@ features = ["stm32l4x6", "rt"]
 
 [dependencies.arrayvec]
 version = "^0.7.0"
+default-features = false
+
+[dependencies.quick-protobuf]
+version = "0.8.0"
 default-features = false

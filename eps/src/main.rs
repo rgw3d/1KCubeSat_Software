@@ -2,12 +2,14 @@
 // #![deny(warnings)]
 #![no_main]
 #![no_std]
+#![feature(alloc_error_handler)]
 
 extern crate arrayvec;
 extern crate cortex_m;
 extern crate nb;
 extern crate rtic;
 extern crate stm32l4xx_hal as hal;
+extern crate alloc;
 
 use cortex_m_semihosting as _;
 use hal::{adc, delay, gpio, prelude::*, serial, stm32::UART4, stm32::USART3};
@@ -17,6 +19,16 @@ use arrayvec::ArrayString;
 use heapless::{consts::U8, spsc};
 use nb::block;
 use rtic::cyccnt::U32Ext as _;
+
+use alloc_cortex_m::CortexMHeap;
+use core::alloc::Layout;
+#[global_allocator]
+static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
+
+pub mod protos;
+use protos::no_std::EpsCommand;
+extern crate quick_protobuf;
+use quick_protobuf::{deserialize_from_slice, serialize_into_slice};
 
 mod eps;
 use eps::BMState;
@@ -62,6 +74,13 @@ const APP: () = {
     #[init (schedule = [blinker], spawn = [blinker])]
     fn init(cx: init::Context) -> init::LateResources {
         static mut RX_QUEUE: spsc::Queue<u8, U8> = spsc::Queue(heapless::i::Queue::new());
+
+        // Setup the Allocator
+        // On the STM32L496 platform, there is 320K of RAM (shared by the stack)
+        let start = cortex_m_rt::heap_start() as usize;
+        let size = 10*1024; // in bytes
+        unsafe { ALLOCATOR.init(start, size) }
+
 
         // Cortex-M peripherals
         let mut core: rtic::Peripherals = cx.core;
@@ -536,5 +555,13 @@ fn apply_battery_voltage_state_machine(
                 digital_pins.hpwr_en.set_low().ok();
             }
         }
+    }
+}
+
+#[alloc_error_handler]
+fn oom(_: Layout) -> ! {
+    // uh oh
+    loop {
+        cortex_m::asm::bkpt();
     }
 }

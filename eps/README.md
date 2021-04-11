@@ -45,6 +45,16 @@ arm-none-eabi-objcopy -O binary target/thumbv7em-none-eabihf/release/eps out.bin
 st-flash --debug --reset --freq=100K write out.bin 0x8000000
 ```
 
+## Protobuf setup
+
+I use [Google Protocol buffers](https://developers.google.com/protocol-buffers/) (protobuf) to send messages back and forth from this microcontroller.
+To make this work with Rust, and in a no-std environment, I use [quick-protobuf](https://github.com/tafia/quick-protobuf). This library allows me to set `default-features=false` which disables reliance on `std`. Using the provided `pb-rs` code generator, I can write `.proto` protobuf specifications.
+
+- [src/messages.proto](src/messages.proto) contains the protobuf definition.
+- `pb-rs` is installed via `cargo install pb-rs`
+- Call `pb-rs src/messages.proto` to generate files. These should be generated in a subfolder of `src/`, and can be included into the project.
+- Note that `quick-protobuf` requires an allocator, which I supply using `alloc_cortex_m`.
+
 ## [`cortex-m-quickstart`](https://github.com/rust-embedded/cortex-m-quickstart)
 
 > See the cortex-m-quickstart repository for a template used to generate this repo
