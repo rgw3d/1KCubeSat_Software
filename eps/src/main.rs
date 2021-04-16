@@ -16,9 +16,9 @@ use hal::{adc, delay, gpio, prelude::*, serial, stm32::UART4, stm32::USART3};
 use panic_semihosting as _;
 
 use arrayvec::ArrayString;
-use heapless::{consts::U8, spsc};
+use heapless::{Vec, consts::*, spsc};
 use nb::block;
-use rtic::cyccnt::U32Ext as _;
+use rtic::cyccnt::{Instant, U32Ext as _};
 
 use alloc_cortex_m::CortexMHeap;
 use core::alloc::Layout;
@@ -28,13 +28,14 @@ static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
 pub mod protos;
 use protos::no_std::EpsCommand;
 extern crate quick_protobuf;
-use quick_protobuf::{deserialize_from_slice, serialize_into_slice};
+use quick_protobuf::{deserialize_from_slice, serialize_into_slice, MessageWrite};
 
 mod eps;
 use eps::BMState;
 use eps::BVState;
 
 const BLINK_PERIOD: u32 = 8_000_000;
+const UART_PARSE_PERIOD: u32 = 1_000_000;
 // ADC constants
 const ADC_NUM_STEPS: f32 = 4096.0;
 const ADC_MAX_VOLTAGE: f32 = 3.3;
@@ -52,8 +53,8 @@ const LOW_BATTERY_HYSTERESIS: u16 =
 #[rtic::app(device = hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
-        rx_prod: spsc::Producer<'static, u8, U8>,
-        rx_cons: spsc::Consumer<'static, u8, U8>,
+        rx_prod: spsc::Producer<'static, EpsCommand, U8>,
+        rx_cons: spsc::Consumer<'static, EpsCommand, U8>,
         debug_rx: serial::Rx<USART3>,
         debug_tx: serial::Tx<USART3>,
         conn_rx: serial::Rx<UART4>,
@@ -69,11 +70,14 @@ const APP: () = {
         analog_pins: eps::AnalogPins,
         digital_pins: eps::DigitalPins,
         delay: delay::DelayCM,
+        uart_parse_active: bool,
+        uart_parse_vec: &'static mut Vec<u8, U1024>,
     }
 
-    #[init (schedule = [blinker], spawn = [blinker])]
+    #[init (schedule = [blinker, uart_buffer_clear], spawn = [blinker])]
     fn init(cx: init::Context) -> init::LateResources {
-        static mut RX_QUEUE: spsc::Queue<u8, U8> = spsc::Queue(heapless::i::Queue::new());
+        static mut RX_QUEUE: spsc::Queue<EpsCommand, U8> = spsc::Queue(heapless::i::Queue::new());
+        static mut UART_PARSE_VEC: Vec<u8, U1024> = Vec(heapless::i::Vec::new()); 
 
         // Setup the Allocator
         // On the STM32L496 platform, there is 320K of RAM (shared by the stack)
@@ -116,6 +120,11 @@ const APP: () = {
             .blinker(cx.start + BLINK_PERIOD.cycles())
             .unwrap();
 
+        // Schedule the Uart clear buffer function (only runs once at start)
+        cx.schedule
+            .uart_buffer_clear(cx.start + UART_PARSE_PERIOD.cycles())
+            .unwrap();
+
         init::LateResources {
             rx_prod,
             rx_cons,
@@ -134,6 +143,8 @@ const APP: () = {
             analog_pins: eps.analog_pins,
             digital_pins: eps.digital_pins,
             delay: eps.delay,
+            uart_parse_active: true, // true because we've scheduled the buffer clear function above
+            uart_parse_vec: UART_PARSE_VEC,
         }
     }
 
@@ -228,29 +239,39 @@ const APP: () = {
             //
             // 4)
             // Process & respond to commands
-            let mut test_str_buffer = ArrayString::<256>::new();
-            core::fmt::write(
-                &mut test_str_buffer,
-                format_args!(
-                    "b1: {:.2} b2: {:.2} pg_s: {} state: {:?} bvstate: {:?}\n\r  s1:{} s2:{} s3:{} s4:{} s5:{} s6:{}\n\r",
-                    battery1 as f32 *BATTERY_ADC_COUNTS_TO_VOLTS, battery2 as f32 *BATTERY_ADC_COUNTS_TO_VOLTS, 
-                    pg_solar, battery_manager_state, battery_voltage_state, solar1, solar2, solar3, solar4, solar5, solar6 
-                ),
-            )
-            .unwrap();
+            //let mut test_str_buffer = ArrayString::<256>::new();
+            //core::fmt::write(
+            //    &mut test_str_buffer,
+            //    format_args!(
+            //        "b1: {:.2} b2: {:.2} pg_s: {} state: {:?} bvstate: {:?}\n\r  s1:{} s2:{} s3:{} s4:{} s5:{} s6:{}\n\r",
+            //        battery1 as f32 *BATTERY_ADC_COUNTS_TO_VOLTS, battery2 as f32 *BATTERY_ADC_COUNTS_TO_VOLTS, 
+            //        pg_solar, battery_manager_state, battery_voltage_state, solar1, solar2, solar3, solar4, solar5, solar6 
+            //    ),
+            //)
+            //.unwrap();
 
-            // Write string buffer out to UART
-            for c in test_str_buffer.as_str().bytes() {
-                block!(tx.write(c)).unwrap();
-            }
+            //// Write string buffer out to UART
+            //for c in test_str_buffer.as_str().bytes() {
+            //    block!(tx.write(c)).unwrap();
+            //}
 
             // This is echo code
-            while let Some(b) = rx_queue.dequeue() {
-                block!(tx.write(b)).unwrap();
-            }
-            //if let Some(b) = rx_queue.dequeue() {
+            //while let Some(b) = rx_queue.dequeue() {
             //    block!(tx.write(b)).unwrap();
             //}
+
+            while let Some(b) = rx_queue.dequeue() {
+                let mut tmp_buf = [0u8; 1024];
+                serialize_into_slice(&b, &mut tmp_buf).ok();
+                for x in (0..(b.get_size() + 1)){
+                    block!(tx.write( tmp_buf[x])).unwrap();
+
+                }
+                //for elem in &tmp_buf {
+                //    block!(tx.write(tmp_buf.len() as u8)).unwrap();
+                //    block!(tx.write(*elem)).unwrap();
+                //}
+            }
 
             //
             // 5)
@@ -264,20 +285,61 @@ const APP: () = {
         }
     }
 
-    #[task(binds = USART3, resources = [led5, debug_rx, rx_prod], priority = 3)]
+
+    // This task and uart_parse_active share the same priority, so they can't pre-empt each other
+    #[task(binds = USART3, resources = [led5, debug_rx, rx_prod, uart_parse_active, uart_parse_vec], schedule = [uart_buffer_clear], priority = 3)]
     fn usart3(cx: usart3::Context) {
-        cx.resources.led5.set_high().ok();
+
         let rx = cx.resources.debug_rx;
         let queue = cx.resources.rx_prod;
-
-        let b = match rx.read() {
-            Ok(b) => b,
-            Err(_err) => b'x',
+        let uart_parse_active = cx.resources.uart_parse_active;
+        let uart_parse_vec = cx.resources.uart_parse_vec;
+        match rx.read() {
+            Ok(b) => {
+                // push byte onto vector queue
+                // Nothing to do here if there if the buffer is full
+                uart_parse_vec.push(b).ok();
+            },
+            _ => {}
         };
-        match queue.enqueue(b) {
-            Ok(()) => (),
-            Err(_err) => {}
+
+        match deserialize_from_slice(&uart_parse_vec) {
+            Ok(parsed_cmd) => {
+                // nothing to do here on error
+                queue.enqueue(parsed_cmd).ok();
+            },
+            Err(_) => {/* Do nothing on error*/}
         }
+
+
+        // Schedule the buffer clear activity (if it isn't already running)
+        if *uart_parse_active == false {
+            *uart_parse_active = true;
+            cx.resources.led5.set_low().ok();
+            cx.schedule
+                .uart_buffer_clear(Instant::now() + UART_PARSE_PERIOD.cycles())
+                .unwrap();
+        }
+    }
+
+    // This task and usart3 share the same priority, so they can't pre-empt each other
+    #[task(resources = [led5, uart_parse_active, uart_parse_vec], priority = 3)]
+    fn uart_buffer_clear(cx: uart_buffer_clear::Context) {
+        let uart_parse_active = cx.resources.uart_parse_active;
+        let uart_parse_vec = cx.resources.uart_parse_vec;
+        let led5 = cx.resources.led5;
+
+        // turn off LED
+        led5.set_high().ok();
+        // Reset bool guard
+        *uart_parse_active = false;
+
+        // Clear buffer
+        uart_parse_vec.clear();
+        //while let Some(elem) = uart_parse_vec.pop() {
+        //    //cortex_m::asm::bkpt();
+        //    let _x = elem;
+        //}
     }
 
     #[task(resources = [led1], schedule = [blinker], priority = 1)]
@@ -304,6 +366,7 @@ const APP: () = {
 
         // I think any of the interupts work??
         fn LCD();
+        fn SAI1();
     }
 };
 

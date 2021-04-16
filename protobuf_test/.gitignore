@@ -4,8 +4,6 @@
 Cargo.lock
 target/
 
-!openocd_cfg/target/
-
 # editor files
 .vscode/*
 !.vscode/*.md

@@ -1,0 +1,18 @@
+[package]
+name = "protobuf_test"
+version = "0.1.0"
+authors = ["Richard Wendel <richard.wendel@hey.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+[dependencies.quick-protobuf]
+version = "0.8.0"
+
+[dependencies.serialport]
+version = "4.0.0"
+
+[dependencies.byteorder]
+version = "1.4.3"

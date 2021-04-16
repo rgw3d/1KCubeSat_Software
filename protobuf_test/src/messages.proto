@@ -1,0 +1,55 @@
+
+syntax = "proto3";
+
+enum CommandID {
+    SetPowerRailState = 0;
+    GetPowerRailState = 1;
+
+    MeasureBatteryVoltage = 2;
+    GetBatteryVoltage     = 3;
+
+    MeasureSolarVoltage = 4;
+    GetSolarVoltage = 5;
+
+    GetBatteryState = 6;
+}
+
+message EpsCommand {
+    CommandID cid = 1; 
+
+    optional int32 rail = 2;
+    optional bool  setRailOn = 3; 
+}
+
+message RailState {
+    bool isRailOn = 1;
+}
+
+message BatteryVoltage {
+    int32 battery1 = 1;
+    int32 battery2 = 2;
+}
+
+message SolarVoltage {
+    int32 side1 = 1;
+    int32 side2 = 2;
+    int32 side3 = 3;
+    int32 side4 = 4;
+    int32 side5 = 5;
+    int32 side6 = 6;
+}
+
+message BatteryState {
+    int32 battery1State = 1;
+    int32 battery2State = 2;
+}
+
+message EpsResponse {
+    CommandID cid = 1; 
+    oneof resp {
+        RailState railState = 2;
+        BatteryVoltage batteryVoltage = 3;
+        SolarVoltage solarVoltage = 4;
+        BatteryState batteryState = 5;
+    }
+}
