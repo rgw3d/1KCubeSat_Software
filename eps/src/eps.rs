@@ -97,6 +97,33 @@ pub struct AnalogPins {
     pub solar6: gpio::PA3<gpio::Analog>,
 }
 
+pub enum PowerRails {
+    Rail1AvionicsStm = 0,
+    Rail13EpsStm = 12,
+}
+
+#[derive(core::default::Default)]
+pub struct RailState {
+    pub rail1: bool,
+    pub rail2: bool,
+    pub rail3: bool,
+    pub rail4: bool,
+    pub rail5: bool,
+    pub rail6: bool,
+    pub rail7: bool,
+    pub rail8: bool,
+    pub rail9: bool,
+    pub rail10: bool,
+    pub rail11: bool,
+    pub rail12: bool,
+    pub rail13: bool,
+    pub rail14: bool,
+    pub rail15: bool,
+    pub rail16: bool,
+    pub hpwr1: bool,
+    pub hpwr2: bool,
+}
+
 impl EPS {
     pub fn init(device: hal::stm32::Peripherals) -> EPS {
         // Constrain some device peripherials so we can setup the clock config below

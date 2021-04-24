@@ -4,35 +4,35 @@
 #![no_std]
 #![feature(alloc_error_handler)]
 
+extern crate alloc;
 extern crate arrayvec;
 extern crate cortex_m;
 extern crate nb;
+extern crate quick_protobuf;
 extern crate rtic;
 extern crate stm32l4xx_hal as hal;
-extern crate alloc;
-
-use cortex_m_semihosting as _;
-use hal::{adc, delay, gpio, prelude::*, serial, stm32::UART4, stm32::USART3};
-use panic_semihosting as _;
-
-use arrayvec::ArrayString;
-use heapless::{Vec, consts::*, spsc};
-use nb::block;
-use rtic::cyccnt::{Instant, U32Ext as _};
 
 use alloc_cortex_m::CortexMHeap;
+use arrayvec::ArrayString;
 use core::alloc::Layout;
+use core::convert::Infallible;
+use cortex_m_semihosting as _;
+use hal::{adc, delay, gpio, prelude::*, serial, stm32::UART4, stm32::USART3};
+use heapless::{consts::*, spsc, Vec};
+use nb::block;
+use panic_semihosting as _;
+use rtic::cyccnt::{Instant, U32Ext as _};
+pub mod protos;
+use protos::no_std::{
+    mod_EpsResponse, BatteryManagerState, BatteryManagerStates, BatteryVoltage,
+    BatteryVoltageState, CommandID, EpsCommand, EpsResponse, RailState, SolarVoltage,
+};
+use quick_protobuf::{deserialize_from_slice, serialize_into_slice, MessageWrite};
+mod eps;
+use eps::{BMState, BVState, PowerRails};
+
 #[global_allocator]
 static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
-
-pub mod protos;
-use protos::no_std::EpsCommand;
-extern crate quick_protobuf;
-use quick_protobuf::{deserialize_from_slice, serialize_into_slice, MessageWrite};
-
-mod eps;
-use eps::BMState;
-use eps::BVState;
 
 const BLINK_PERIOD: u32 = 8_000_000;
 const UART_PARSE_PERIOD: u32 = 1_000_000;
@@ -43,12 +43,14 @@ const ADC_MAX_VOLTAGE: f32 = 3.3;
 const BATTERY_VOLTAGE_LOWER_LIMIT_VOLTS: f32 = 3.0;
 const BATTERY_DIVIDER_RATIO: f32 = 0.6;
 const BATTERY_ADC_VOLTS_TO_COUNTS: f32 = BATTERY_DIVIDER_RATIO / ADC_MAX_VOLTAGE * ADC_NUM_STEPS;
-const BATTERY_ADC_COUNTS_TO_VOLTS: f32 = 1.0 / BATTERY_ADC_VOLTS_TO_COUNTS; 
-const BATTERY_VOTLAGE_LOWER_LIMIT: u16 = (BATTERY_VOLTAGE_LOWER_LIMIT_VOLTS * BATTERY_ADC_VOLTS_TO_COUNTS) as u16;
+const BATTERY_ADC_COUNTS_TO_VOLTS: f32 = 1.0 / BATTERY_ADC_VOLTS_TO_COUNTS;
+const BATTERY_VOTLAGE_LOWER_LIMIT: u16 =
+    (BATTERY_VOLTAGE_LOWER_LIMIT_VOLTS * BATTERY_ADC_VOLTS_TO_COUNTS) as u16;
 // Low battery voltage hysteresis
 const LOW_BATTERY_HYSTERESIS_VOLTS: f32 = 0.1;
 const LOW_BATTERY_HYSTERESIS: u16 =
     (LOW_BATTERY_HYSTERESIS_VOLTS / ADC_MAX_VOLTAGE * ADC_NUM_STEPS) as u16;
+const NUM_POWER_RAILS: usize = 19;
 
 #[rtic::app(device = hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
@@ -77,14 +79,13 @@ const APP: () = {
     #[init (schedule = [blinker, uart_buffer_clear], spawn = [blinker])]
     fn init(cx: init::Context) -> init::LateResources {
         static mut RX_QUEUE: spsc::Queue<EpsCommand, U8> = spsc::Queue(heapless::i::Queue::new());
-        static mut UART_PARSE_VEC: Vec<u8, U1024> = Vec(heapless::i::Vec::new()); 
+        static mut UART_PARSE_VEC: Vec<u8, U1024> = Vec(heapless::i::Vec::new());
 
         // Setup the Allocator
         // On the STM32L496 platform, there is 320K of RAM (shared by the stack)
         let start = cortex_m_rt::heap_start() as usize;
-        let size = 10*1024; // in bytes
+        let size = 10 * 1024; // in bytes
         unsafe { ALLOCATOR.init(start, size) }
-
 
         // Cortex-M peripherals
         let mut core: rtic::Peripherals = cx.core;
@@ -168,6 +169,9 @@ const APP: () = {
         let mut battery_voltage_state: BVState = BVState::BothLow;
         let mut battery_manager_state: (BMState, BMState) =
             (BMState::Suspended, BMState::Suspended);
+        // All rail states are initially false. EPS rail (this processor) gets set to true
+        //      within apply_battery_voltage_state_machine()
+        let mut rail_state: [bool; NUM_POWER_RAILS] = [false; NUM_POWER_RAILS];
 
         loop {
             //
@@ -226,13 +230,16 @@ const APP: () = {
                 battery1_avg,
                 battery2_avg,
             );
-            // Apply change (if any)
+            // Apply Ideal Diode change & determine Power Rail change (if any)
             apply_battery_voltage_state_machine(
                 &next_battery_voltage_state,
                 &battery_voltage_state,
+                &mut rail_state,
                 digital_pins,
                 delay,
             );
+            // Apply change to Power Rail
+            apply_power_rail_state(&rail_state, digital_pins);
             // Increment state
             battery_voltage_state = next_battery_voltage_state;
 
@@ -244,8 +251,8 @@ const APP: () = {
             //    &mut test_str_buffer,
             //    format_args!(
             //        "b1: {:.2} b2: {:.2} pg_s: {} state: {:?} bvstate: {:?}\n\r  s1:{} s2:{} s3:{} s4:{} s5:{} s6:{}\n\r",
-            //        battery1 as f32 *BATTERY_ADC_COUNTS_TO_VOLTS, battery2 as f32 *BATTERY_ADC_COUNTS_TO_VOLTS, 
-            //        pg_solar, battery_manager_state, battery_voltage_state, solar1, solar2, solar3, solar4, solar5, solar6 
+            //        battery1 as f32 *BATTERY_ADC_COUNTS_TO_VOLTS, battery2 as f32 *BATTERY_ADC_COUNTS_TO_VOLTS,
+            //        pg_solar, battery_manager_state, battery_voltage_state, solar1, solar2, solar3, solar4, solar5, solar6
             //    ),
             //)
             //.unwrap();
@@ -260,12 +267,96 @@ const APP: () = {
             //    block!(tx.write(b)).unwrap();
             //}
 
-            while let Some(b) = rx_queue.dequeue() {
-                let mut tmp_buf = [0u8; 1024];
-                serialize_into_slice(&b, &mut tmp_buf).ok();
-                for x in (0..(b.get_size() + 1)){
-                    block!(tx.write( tmp_buf[x])).unwrap();
+            // Loop over any commands we may have recieved and perform their actions
+            while let Some(eps_command) = rx_queue.dequeue() {
+                let eps_response: EpsResponse = match eps_command.cid {
+                    CommandID::SetPowerRailState => {
+                        if let Some(ref rs) = eps_command.railState {
+                            let railIdx = rs.railIdx;
+                            let railState = rs.railState;
+                            rail_state[(railIdx as usize)] = railState;
+                            // Apply change to Power Rail
+                            apply_power_rail_state(&rail_state, digital_pins);
+                        }
+                        // return response
+                        EpsResponse {
+                            cid: eps_command.cid,
+                            resp: mod_EpsResponse::OneOfresp::None,
+                        }
+                    }
+                    CommandID::GetPowerRailState => {
+                        match eps_command.railState {
+                            Some(ref rs) => {
+                                let railIdx = rs.railIdx;
+                                EpsResponse {
+                                    cid: eps_command.cid,
+                                    resp: mod_EpsResponse::OneOfresp::railState(RailState {
+                                        railIdx,
+                                        railState: rail_state[(railIdx as usize)],
+                                    }),
+                                }
+                            }
+                            None => {
+                                // Blank response if the rail wasn't requested
+                                EpsResponse {
+                                    cid: eps_command.cid,
+                                    resp: mod_EpsResponse::OneOfresp::None,
+                                }
+                            }
+                        }
+                    }
+                    CommandID::GetBatteryVoltage => EpsResponse {
+                        cid: eps_command.cid,
+                        resp: mod_EpsResponse::OneOfresp::batteryVoltage(BatteryVoltage {
+                            battery1: battery1 as u32,
+                            battery2: battery2 as u32,
+                        }),
+                    },
+                    CommandID::GetSolarVoltage => EpsResponse {
+                        cid: eps_command.cid,
+                        resp: mod_EpsResponse::OneOfresp::solarVoltage(SolarVoltage {
+                            side1: solar1 as u32,
+                            side2: solar2 as u32,
+                            side3: solar3 as u32,
+                            side4: solar4 as u32,
+                            side5: solar5 as u32,
+                            side6: solar6 as u32,
+                        }),
+                    },
+                    CommandID::GetBatteryVoltageState => EpsResponse {
+                        cid: eps_command.cid,
+                        resp: mod_EpsResponse::OneOfresp::batteryVoltageState(
+                            match battery_voltage_state {
+                                BVState::BothHigh => BatteryVoltageState::BothHigh,
+                                BVState::B1HighB2Low => BatteryVoltageState::B1HighB2Low,
+                                BVState::B1LowB2High => BatteryVoltageState::B1LowB2High,
+                                BVState::BothLow => BatteryVoltageState::BothLow,
+                            },
+                        ),
+                    },
+                    CommandID::GetBatteryManagerState => EpsResponse {
+                        cid: eps_command.cid,
+                        resp: mod_EpsResponse::OneOfresp::batteryManagerStates(
+                            BatteryManagerStates {
+                                battery1State: match battery_manager_state {
+                                    (BMState::Suspended, _) => BatteryManagerState::Suspended,
+                                    (BMState::LowPower, _) => BatteryManagerState::LowPower,
+                                    (BMState::HighPower, _) => BatteryManagerState::HighPower,
+                                },
+                                battery2State: match battery_manager_state {
+                                    (_, BMState::Suspended) => BatteryManagerState::Suspended,
+                                    (_, BMState::LowPower) => BatteryManagerState::LowPower,
+                                    (_, BMState::HighPower) => BatteryManagerState::HighPower,
+                                },
+                            },
+                        ),
+                    },
+                };
 
+                let mut tmp_buf = [0u8; 1024];
+                serialize_into_slice(&eps_response, &mut tmp_buf).ok();
+                for elem in tmp_buf.iter().take(eps_response.get_size() + 1) {
+                    block!(tx.write(*elem)).unwrap();
                 }
                 //for elem in &tmp_buf {
                 //    block!(tx.write(tmp_buf.len() as u8)).unwrap();
@@ -281,39 +372,28 @@ const APP: () = {
             //
             // 6)
             // Sleep
-            delay.delay_ms(250u32);
+            delay.delay_ms(20u32);
         }
     }
-
 
     // This task and uart_parse_active share the same priority, so they can't pre-empt each other
     #[task(binds = USART3, resources = [led5, debug_rx, rx_prod, uart_parse_active, uart_parse_vec], schedule = [uart_buffer_clear], priority = 3)]
     fn usart3(cx: usart3::Context) {
-
         let rx = cx.resources.debug_rx;
         let queue = cx.resources.rx_prod;
         let uart_parse_active = cx.resources.uart_parse_active;
         let uart_parse_vec = cx.resources.uart_parse_vec;
-        match rx.read() {
-            Ok(b) => {
-                // push byte onto vector queue
-                // Nothing to do here if there if the buffer is full
-                uart_parse_vec.push(b).ok();
-            },
-            _ => {}
+        if let Ok(b) = rx.read() {
+            // push byte onto vector queue
+            uart_parse_vec.push(b).ok();
         };
 
-        match deserialize_from_slice(&uart_parse_vec) {
-            Ok(parsed_cmd) => {
-                // nothing to do here on error
-                queue.enqueue(parsed_cmd).ok();
-            },
-            Err(_) => {/* Do nothing on error*/}
+        if let Ok(parsed_cmd) = deserialize_from_slice(&uart_parse_vec) {
+            queue.enqueue(parsed_cmd).ok();
         }
 
-
         // Schedule the buffer clear activity (if it isn't already running)
-        if *uart_parse_active == false {
+        if !(*uart_parse_active) {
             *uart_parse_active = true;
             cx.resources.led5.set_low().ok();
             cx.schedule
@@ -344,16 +424,16 @@ const APP: () = {
 
     #[task(resources = [led1], schedule = [blinker], priority = 1)]
     fn blinker(cx: blinker::Context) {
-        static mut LED_STATE: bool = false;
+        static mut LED_IS_ON: bool = false;
 
         //cortex_m::asm::bkpt();
 
-        if *LED_STATE == true {
+        if *LED_IS_ON {
             cx.resources.led1.set_low().ok();
-            *LED_STATE = false;
+            *LED_IS_ON = false;
         } else {
             cx.resources.led1.set_high().ok();
-            *LED_STATE = true;
+            *LED_IS_ON = true;
         }
 
         // Schedule
@@ -544,12 +624,11 @@ fn run_battery_voltage_state_machine(
 fn apply_battery_voltage_state_machine(
     next_battery_voltage_state: &BVState,
     battery_voltage_state: &BVState,
+    rail_state: &mut [bool; NUM_POWER_RAILS],
     digital_pins: &mut eps::DigitalPins,
     delay: &mut delay::DelayCM,
 ) {
     if next_battery_voltage_state != battery_voltage_state {
-        // Enable both ideal diodes
-        // Now
         match next_battery_voltage_state {
             BVState::BothHigh => {
                 // Enable both ideal diodes
@@ -558,7 +637,7 @@ fn apply_battery_voltage_state_machine(
 
                 // Make sure that the Avionics board STM32 is on
                 // With the Avionics board on, it can turn on other rails
-                digital_pins.pwr1.set_high().ok();
+                rail_state[PowerRails::Rail1AvionicsStm as usize] = true;
             }
             BVState::B1LowB2High => {
                 // To avoid accidentally powering off our system,
@@ -574,7 +653,7 @@ fn apply_battery_voltage_state_machine(
 
                 // Make sure that the Avionics board STM32 is on
                 // With the Avionics board on, it can turn on other rails
-                digital_pins.pwr1.set_high().ok();
+                rail_state[PowerRails::Rail1AvionicsStm as usize] = true;
             }
             BVState::B1HighB2Low => {
                 // To avoid accidentally powering off our system,
@@ -590,7 +669,7 @@ fn apply_battery_voltage_state_machine(
 
                 // Make sure that the Avionics board STM32 is on
                 // With the Avionics board on, it can turn on other rails
-                digital_pins.pwr1.set_high().ok();
+                rail_state[PowerRails::Rail1AvionicsStm as usize] = true;
             }
             BVState::BothLow => {
                 // Do nothing to ideal diodes, our last state should have been B1HighB2Low
@@ -598,26 +677,54 @@ fn apply_battery_voltage_state_machine(
                 // We can't turn off both ideal diodes because that would reset us.
 
                 // Set all power rails (except EPS) low
-                digital_pins.pwr1.set_low().ok();
-                digital_pins.pwr2.set_low().ok();
-                digital_pins.pwr3.set_low().ok();
-                digital_pins.pwr4.set_low().ok();
-                digital_pins.pwr5.set_low().ok();
-                digital_pins.pwr6.set_low().ok();
-                digital_pins.pwr7.set_low().ok();
-                digital_pins.pwr8.set_low().ok();
-                digital_pins.pwr9.set_low().ok();
-                digital_pins.pwr10.set_low().ok();
-                digital_pins.pwr11.set_low().ok();
-                digital_pins.pwr12.set_low().ok();
-                digital_pins.pwr13.set_high().ok(); // EPS rail
-                digital_pins.pwr14.set_low().ok();
-                digital_pins.pwr16.set_low().ok();
-                digital_pins.hpwr1.set_low().ok();
-                digital_pins.hpwr2.set_low().ok();
-                digital_pins.hpwr_en.set_low().ok();
+                // Set all power rails false
+                rail_state.iter_mut().for_each(|x| *x = false);
+                // And set EPS high, because otherwise we are turning ourselves off.
+                rail_state[PowerRails::Rail13EpsStm as usize] = true;
             }
         }
+    }
+    // Always set EPS high, because otherwise we are turning ourselves off.
+    rail_state[PowerRails::Rail13EpsStm as usize] = true;
+}
+
+fn apply_power_rail_state(
+    rail_state: &[bool; NUM_POWER_RAILS],
+    digital_pins: &mut eps::DigitalPins,
+) {
+    for x in 0..(rail_state.len()) {
+        let pin: Option<&mut dyn OutputPin<Error = Infallible>> = match (x + 1) {
+            1 => Some(&mut digital_pins.pwr1),
+            2 => Some(&mut digital_pins.pwr2),
+            3 => Some(&mut digital_pins.pwr3),
+            4 => Some(&mut digital_pins.pwr4),
+            5 => Some(&mut digital_pins.pwr5),
+            6 => Some(&mut digital_pins.pwr6),
+            7 => Some(&mut digital_pins.pwr7),
+            8 => Some(&mut digital_pins.pwr8),
+            9 => Some(&mut digital_pins.pwr9),
+            10 => Some(&mut digital_pins.pwr10),
+            11 => Some(&mut digital_pins.pwr11),
+            12 => Some(&mut digital_pins.pwr12),
+            13 => Some(&mut digital_pins.pwr13),
+            14 => Some(&mut digital_pins.pwr14),
+            15 => Some(&mut digital_pins.pwr15),
+            16 => Some(&mut digital_pins.pwr16),
+            17 => Some(&mut digital_pins.hpwr1),
+            18 => Some(&mut digital_pins.hpwr2),
+            19 => Some(&mut digital_pins.hpwr_en),
+            _ => None,
+        };
+        if let Some(p) = pin {
+            match rail_state[x] {
+                true => {
+                    p.set_high().ok();
+                }
+                false => {
+                    p.set_low().ok();
+                }
+            }
+        };
     }
 }
 

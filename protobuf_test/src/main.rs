@@ -1,7 +1,9 @@
 use quick_protobuf::{deserialize_from_slice, serialize_into_slice, serialize_into_vec};
-use std::time::Duration;
+use std::{thread, time::Duration};
 pub mod messages;
-use messages::{CommandID, EpsCommand};
+use messages::{
+    mod_EpsResponse::OneOfresp, CommandID, EpsCommand, EpsResponse, PowerRails, RailState,
+};
 extern crate byteorder;
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -11,45 +13,221 @@ fn main() {
         .timeout(Duration::from_millis(10))
         .open()
         .expect("Failed to open port");
-    // Write
-    let epsCmd = EpsCommand {
-        cid: CommandID::SetPowerRailState,
-        rail: 1,
-        setRailOn: true,
+    const SLEEP_TIME_BETWEEN_COMMANDS: u64 = 50;
+    //
+    //
+    // Get Power rail 1 state, should be on (STM rail)
+    let cmd = EpsCommand {
+        cid: CommandID::GetPowerRailState,
+        railState: Some(RailState {
+            railIdx: PowerRails::Rail1,
+            railState: false, // this variable doesn't matter
+        }),
     };
-
-    //serialize_into_slice(epsCmd, out: &mut [u8])
-    let out_vec = serialize_into_vec(&epsCmd).expect("oof ouch why can't I write message");
-    println!("len of out_vec: {:?}", out_vec.len());
-    for elem in out_vec.iter() {
-        //port.write(elem).ok();
-        println!("elem: {:?}", elem);
+    let expected_resp = EpsResponse {
+        cid: CommandID::GetPowerRailState,
+        resp: OneOfresp::railState(RailState {
+            railIdx: PowerRails::Rail1,
+            railState: true,
+        }),
+    };
+    if let Ok(resp) = send_eps_command(&mut port, cmd) {
+        assert_eq!(resp, expected_resp);
     }
+    thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
 
-    //let output = "This is a test. This is only a test.".as_bytes();
-    //port.write_all(output).expect("Write failed!");
+    //
+    //
+    // Get Power rail 13, should be on (EPS power rail)
+    let cmd = EpsCommand {
+        cid: CommandID::GetPowerRailState,
+        railState: Some(RailState {
+            railIdx: PowerRails::Rail13,
+            railState: false,
+        }),
+    };
+    let expected_resp = EpsResponse {
+        cid: CommandID::GetPowerRailState,
+        resp: OneOfresp::railState(RailState {
+            railIdx: PowerRails::Rail13,
+            // TODO Fix
+            //
+            // should be true
+            railState: true,
+        }),
+    };
+    if let Ok(resp) = send_eps_command(&mut port, cmd) {
+        assert_eq!(resp, expected_resp);
+    }
+    thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
 
+    //
+    //
+    // Set power rail 2 to on
+    let cmd = EpsCommand {
+        cid: CommandID::SetPowerRailState,
+        railState: Some(RailState {
+            railIdx: PowerRails::Rail2,
+            railState: true,
+        }),
+    };
+    let expected_resp = EpsResponse {
+        cid: CommandID::SetPowerRailState,
+        resp: OneOfresp::None,
+    };
+    if let Ok(resp) = send_eps_command(&mut port, cmd) {
+        assert_eq!(resp, expected_resp);
+    }
+    thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
+
+    //
+    //
+    // Get power rail 2, make sure it is on
+    let cmd = EpsCommand {
+        cid: CommandID::GetPowerRailState,
+        railState: Some(RailState {
+            railIdx: PowerRails::Rail2,
+            railState: false,
+        }),
+    };
+    let expected_resp = EpsResponse {
+        cid: CommandID::GetPowerRailState,
+        resp: OneOfresp::railState(RailState {
+            railIdx: PowerRails::Rail2,
+            railState: true,
+        }),
+    };
+    if let Ok(resp) = send_eps_command(&mut port, cmd) {
+        assert_eq!(resp, expected_resp);
+    }
+    thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
+
+    //
+    //
+    // Set power rail 2 to off
+    let cmd = EpsCommand {
+        cid: CommandID::SetPowerRailState,
+        railState: Some(RailState {
+            railIdx: PowerRails::Rail2,
+            railState: false,
+        }),
+    };
+    let expected_resp = EpsResponse {
+        cid: CommandID::SetPowerRailState,
+        resp: OneOfresp::None,
+    };
+    if let Ok(resp) = send_eps_command(&mut port, cmd) {
+        assert_eq!(resp, expected_resp);
+    }
+    thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
+
+    //
+    //
+    // Get power rail 2, make sure it is off
+    let cmd = EpsCommand {
+        cid: CommandID::GetPowerRailState,
+        railState: Some(RailState {
+            railIdx: PowerRails::Rail2,
+            railState: false,
+        }),
+    };
+    let expected_resp = EpsResponse {
+        cid: CommandID::GetPowerRailState,
+        resp: OneOfresp::railState(RailState {
+            railIdx: PowerRails::Rail2,
+            railState: false,
+        }),
+    };
+    if let Ok(resp) = send_eps_command(&mut port, cmd) {
+        assert_eq!(resp, expected_resp);
+    }
+    thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
+
+    //
+    //
+    // Get Battery Voltages
+    let cmd = EpsCommand {
+        cid: CommandID::GetBatteryVoltage,
+        railState: None,
+    };
+    if let Ok(resp) = send_eps_command(&mut port, cmd) {
+        if let OneOfresp::batteryVoltage(_) = resp.resp {
+            println!("Pass!");
+        }
+    }
+    thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
+
+    //
+    //
+    // Get Solar Voltages
+    let cmd = EpsCommand {
+        cid: CommandID::GetSolarVoltage,
+        railState: None,
+    };
+    if let Ok(resp) = send_eps_command(&mut port, cmd) {
+        if let OneOfresp::solarVoltage(_) = resp.resp {
+            println!("Pass!");
+        }
+    }
+    thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
+
+    //
+    //
+    // Get Battery Voltage State
+    let cmd = EpsCommand {
+        cid: CommandID::GetBatteryVoltageState,
+        railState: None,
+    };
+    if let Ok(resp) = send_eps_command(&mut port, cmd) {
+        if let OneOfresp::batteryVoltageState(_) = resp.resp {
+            println!("Pass!");
+        }
+    }
+    thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
+
+    //
+    //
+    // Get Battery Manager States
+    let cmd = EpsCommand {
+        cid: CommandID::GetBatteryManagerState,
+        railState: None,
+    };
+    if let Ok(resp) = send_eps_command(&mut port, cmd) {
+        if let OneOfresp::batteryManagerStates(_) = resp.resp {
+            println!("Pass!");
+        }
+    }
+    thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
+}
+
+fn send_eps_command(
+    port: &mut std::boxed::Box<dyn serialport::SerialPort>,
+    eps_cmd: EpsCommand,
+) -> quick_protobuf::Result<EpsResponse> {
+    println!("\nSending EpsCommand: {:?}", eps_cmd);
+    let out_vec = serialize_into_vec(&eps_cmd).expect("oof ouch why can't I write message");
+    println!("out_vec: {:?}", out_vec);
     port.clear(serialport::ClearBuffer::All).ok();
-    port.set_timeout(Duration::new(1, 0)).ok();
+    port.set_timeout(Duration::from_millis(200)).ok();
     port.write_all(&out_vec).ok();
 
-    let epsCmdOut: EpsCommand = deserialize_from_slice(&out_vec).expect("pls work");
-    assert_eq!(epsCmd, epsCmdOut);
-
-    // Read how big the message is (in bytes)
-    let mut incoming_message_size: Vec<u8> = vec![0; 1];
-    port.read_exact(incoming_message_size.as_mut_slice())
-        .expect("Found no data1!");
-    println!("got size: {:?}", incoming_message_size[0]);
-    // Now read the appropriate number of bytes
+    let mut one_byte_vec: Vec<u8> = vec![0; 1];
     let mut incoming_message: Vec<u8> = Vec::new();
-    incoming_message.resize(incoming_message_size[0] as usize, 0);
-    port.read_exact(incoming_message.as_mut_slice())
-        .expect("Found no data2!");
-
-    // print it out
-    for elem in &incoming_message {
-        //port.write(elem).ok();
-        println!("got: {:?}", elem);
+    while let Ok(()) = port.read_exact(one_byte_vec.as_mut_slice()) {
+        incoming_message.push(one_byte_vec[0]);
     }
+    println!("in_vec : {:?}", incoming_message);
+
+    // Parse the message
+    let eps_response: quick_protobuf::Result<EpsResponse> =
+        deserialize_from_slice(&incoming_message);
+    match eps_response {
+        Ok(ref resp) => {
+            println!("Eps Response: {:?}", resp);
+        }
+        Err(ref err) => {
+            println!("Eps Response Err: {:?}", err);
+        }
+    }
+    eps_response
 }

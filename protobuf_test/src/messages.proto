@@ -2,46 +2,76 @@
 syntax = "proto3";
 
 enum CommandID {
-    SetPowerRailState = 0;
-    GetPowerRailState = 1;
+    SetPowerRailState = 1;
+    GetPowerRailState = 2;
+    GetBatteryVoltage = 3;
+    GetSolarVoltage = 4;
+    GetBatteryVoltageState = 5;
+    GetBatteryManagerState = 6;
+}
 
-    MeasureBatteryVoltage = 2;
-    GetBatteryVoltage     = 3;
+enum PowerRails {
+    Rail1 = 0;
+    Rail2 = 1;
+    Rail3 = 2;
+    Rail4 = 3;
+    Rail5 = 4;
+    Rail6 = 5;
+    Rail7 = 6;
+    Rail8 = 7;
+    Rail9 = 8;
+    Rail10 = 9;
+    Rail11 = 10;
+    Rail12 = 11;
+    Rail13 = 12;
+    Rail14 = 13;
+    Rail15 = 14;
+    Rail16 = 15;
+    Hpwr1 = 16;
+    Hpwr2 = 17;
+    HpwrEn = 18;
+}
 
-    MeasureSolarVoltage = 4;
-    GetSolarVoltage = 5;
-
-    GetBatteryState = 6;
+message RailState {
+    PowerRails railIdx = 1;
+    bool railState = 2;
 }
 
 message EpsCommand {
     CommandID cid = 1; 
-
-    optional int32 rail = 2;
-    optional bool  setRailOn = 3; 
-}
-
-message RailState {
-    bool isRailOn = 1;
+    optional RailState railState = 2;
 }
 
 message BatteryVoltage {
-    int32 battery1 = 1;
-    int32 battery2 = 2;
+    uint32 battery1 = 1;
+    uint32 battery2 = 2;
 }
 
 message SolarVoltage {
-    int32 side1 = 1;
-    int32 side2 = 2;
-    int32 side3 = 3;
-    int32 side4 = 4;
-    int32 side5 = 5;
-    int32 side6 = 6;
+    uint32 side1 = 1;
+    uint32 side2 = 2;
+    uint32 side3 = 3;
+    uint32 side4 = 4;
+    uint32 side5 = 5;
+    uint32 side6 = 6;
 }
 
-message BatteryState {
-    int32 battery1State = 1;
-    int32 battery2State = 2;
+enum BatteryVoltageState {
+    BothHigh = 1;
+    B1HighB2Low = 2;
+    B1LowB2High = 3;
+    BothLow = 4;
+}
+
+enum BatteryManagerState {
+    Suspended = 1;
+    LowPower = 2;
+    HighPower = 3;
+}
+
+message BatteryManagerStates {
+    BatteryManagerState battery1State = 1;
+    BatteryManagerState battery2State = 2;
 }
 
 message EpsResponse {
@@ -50,6 +80,7 @@ message EpsResponse {
         RailState railState = 2;
         BatteryVoltage batteryVoltage = 3;
         SolarVoltage solarVoltage = 4;
-        BatteryState batteryState = 5;
+        BatteryVoltageState batteryVoltageState = 5;
+        BatteryManagerStates batteryManagerStates = 6;
     }
 }
