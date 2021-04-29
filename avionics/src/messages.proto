@@ -1,0 +1,88 @@
+
+syntax = "proto3";
+
+package protos.no_std;
+
+enum CommandID {
+    SetPowerRailState = 1;
+    GetPowerRailState = 2;
+    GetBatteryVoltage = 3;
+    GetSolarVoltage = 4;
+    GetBatteryVoltageState = 5;
+    GetBatteryManagerState = 6;
+}
+
+enum PowerRails {
+    Rail1 = 0;
+    Rail2 = 1;
+    Rail3 = 2;
+    Rail4 = 3;
+    Rail5 = 4;
+    Rail6 = 5;
+    Rail7 = 6;
+    Rail8 = 7;
+    Rail9 = 8;
+    Rail10 = 9;
+    Rail11 = 10;
+    Rail12 = 11;
+    Rail13 = 12;
+    Rail14 = 13;
+    Rail15 = 14;
+    Rail16 = 15;
+    Hpwr1 = 16;
+    Hpwr2 = 17;
+    HpwrEn = 18;
+}
+
+message RailState {
+    PowerRails railIdx = 1;
+    bool railState = 2;
+}
+
+message EpsCommand {
+    CommandID cid = 1; 
+    optional RailState railState = 2;
+}
+
+message BatteryVoltage {
+    uint32 battery1 = 1;
+    uint32 battery2 = 2;
+}
+
+message SolarVoltage {
+    uint32 side1 = 1;
+    uint32 side2 = 2;
+    uint32 side3 = 3;
+    uint32 side4 = 4;
+    uint32 side5 = 5;
+    uint32 side6 = 6;
+}
+
+enum BatteryVoltageState {
+    BothHigh = 1;
+    B1HighB2Low = 2;
+    B1LowB2High = 3;
+    BothLow = 4;
+}
+
+enum BatteryManagerState {
+    Suspended = 1;
+    LowPower = 2;
+    HighPower = 3;
+}
+
+message BatteryManagerStates {
+    BatteryManagerState battery1State = 1;
+    BatteryManagerState battery2State = 2;
+}
+
+message EpsResponse {
+    CommandID cid = 1; 
+    oneof resp {
+        RailState railState = 2;
+        BatteryVoltage batteryVoltage = 3;
+        SolarVoltage solarVoltage = 4;
+        BatteryVoltageState batteryVoltageState = 5;
+        BatteryManagerStates batteryManagerStates = 6;
+    }
+}

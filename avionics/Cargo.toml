@@ -1,0 +1,60 @@
+[package]
+authors = ["Richard Wendel <richard.wendel@hey.com>"]
+edition = "2018"
+readme = "README.md"
+name = "avionics"
+version = "0.1.0"
+
+[dependencies]
+cortex-m = "0.6.3"
+cortex-m-rt = "0.6.12"
+cortex-m-semihosting = "0.3.3"
+cortex-m-rtic = "^0.5.5"
+# panic-halt = "0.2.0"
+panic-semihosting = "^0.5.6"
+heapless = "^0.6.1"
+nb = "1.0.0"
+alloc-cortex-m = "0.4.1"
+
+# Uncomment for the panic example.
+# panic-itm = "0.4.1"
+
+# Uncomment for the allocator example.
+# alloc-cortex-m = "0.4.0"
+
+# Uncomment for the device example.
+# Update `memory.x`, set target to `thumbv7em-none-eabihf` in `.cargo/config`,
+# and then use `cargo build --examples device` to build it.
+# [dependencies.stm32f3]
+# features = ["stm32f303", "rt"]
+# version = "0.7.1"
+
+# this lets you use `cargo fix`!
+[[bin]]
+name = "avionics"
+test = false
+bench = false
+
+[profile.release]
+codegen-units = 1 # better optimizations
+debug = true # symbols are nice and they don't increase the size on Flash
+lto = true # better optimizations
+
+[dependencies.stm32l4]
+version = "0.13.0"
+features = ["stm32l4x6", "rt"]
+
+[dependencies.stm32l4xx-hal]
+#version = "^0.6.0"
+git = "https://github.com/stm32-rs/stm32l4xx-hal.git"
+#branch = "master"
+rev = "266e62f71d4d59e87925675802b8617f9ade6afc"
+features = ["stm32l4x6", "rt"]
+
+[dependencies.arrayvec]
+version = "^0.7.0"
+default-features = false
+
+[dependencies.quick-protobuf]
+version = "0.8.0"
+default-features = false

@@ -1,0 +1,105 @@
+{
+    /* 
+     * Requires the Rust Language Server (RLS) and Cortex-Debug extensions
+     * https://marketplace.visualstudio.com/items?itemName=rust-lang.rust
+     * https://marketplace.visualstudio.com/items?itemName=marus25.cortex-debug
+     */
+    "version": "0.2.0",
+    "configurations": [
+        // I was never able to get these ST-Link commands to work. 
+        // I was only ever able to get openocd to work, which uses ST-Link. Idk.
+        //{
+        //    "type": "cortex-debug",
+        //    "request": "launch",
+        //    "name": "Debug (st-link)",
+        //    "cwd": "${workspaceRoot}",
+        //    "servertype": "stutil",
+        //    "executable": "./target/thumbv7em-none-eabihf/release/eps",
+        //    "preLaunchTask": "Cargo Build (release)",
+        //    "runToMain": true,
+        //    "device": "STM32L496ZGT6"
+        //},
+        //{
+        //    "type": "cortex-debug",
+        //    "request": "launch",
+        //    "name": "Debug (QEMU)",
+        //    "servertype": "qemu",
+        //    "cwd": "${workspaceRoot}",
+        //    "preLaunchTask": "Cargo Build (debug)",
+        //    "runToMain": true,
+        //    "executable": "./target/thumbv7m-none-eabi/debug/eps",
+        //    /* Run `cargo build --example hello` and uncomment this line to run semi-hosting example */
+        //    //"executable": "./target/thumbv7m-none-eabi/debug/examples/hello",
+        //    "cpu": "cortex-m3",
+        //    "machine": "lm3s6965evb",
+        //},
+        {
+            /* Configuration for the STM32L496 */
+            "type": "cortex-debug",
+            "request": "launch",
+            "name": "Debug Release (OpenOCD)",
+            "servertype": "openocd",
+            "cwd": "${workspaceRoot}",
+            "preLaunchTask": "Cargo Build (release)",
+            "runToMain": true,
+            "executable": "./target/thumbv7em-none-eabihf/release/avionics",
+            "device": "STM32L496ZGT6",
+            "searchDir": [
+                "${workspaceRoot}/../openocd_cfg/"
+            ],
+            "configFiles": [
+                "${workspaceRoot}/openocd.cfg",
+                //"interface/stlink-v2-1.cfg",
+                //"target/stm32l4x.cfg"
+            ],
+            "svdFile": "${workspaceRoot}/../svd/STM32L4x6.svd",
+            "swoConfig": {
+                "enabled": false,
+                "cpuFrequency": 8000000,
+                "swoFrequency": 2000000,
+                "source": "probe",
+                "decoders": [
+                    {
+                        "type": "console",
+                        "label": "ITM",
+                        "port": 0
+                    }
+                ]
+            }
+        },
+        {
+            /* Configuration for the STM32L496 */
+            "type": "cortex-debug",
+            "request": "launch",
+            "name": "Debug Debug (OpenOCD)",
+            "servertype": "openocd",
+            "cwd": "${workspaceRoot}",
+            "preLaunchTask": "Cargo Build (debug)",
+            "runToMain": true,
+            "executable": "./target/thumbv7em-none-eabihf/debug/avionics",
+            "device": "STM32L496ZGT6",
+            "searchDir": [
+                "${workspaceRoot}/../openocd_cfg/"
+            ],
+            "configFiles": [
+                "${workspaceRoot}/openocd.cfg",
+                //"interface/stlink-v2-1.cfg",
+                //"target/stm32l4x.cfg"
+            ],
+            "svdFile": "${workspaceRoot}/../svd/STM32L496.svd",
+            "swoConfig": {
+                "enabled": false,
+                "cpuFrequency": 8000000,
+                "swoFrequency": 2000000,
+                "source": "probe",
+                "decoders": [
+                    {
+                        "type": "console",
+                        "label": "ITM",
+                        "port": 0
+                    }
+                ]
+            }
+        }
+    ]
+}
