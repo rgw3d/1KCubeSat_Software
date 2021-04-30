@@ -1,28 +1,13 @@
 extern crate stm32l4xx_hal as hal;
-use hal::{adc, delay, gpio, prelude::*, serial, serial::Serial, stm32::UART4, stm32::USART3};
-
-#[derive(core::fmt::Debug)]
-pub enum BMState {
-    Suspended,
-    LowPower,
-    HighPower,
-}
-
-#[derive(core::fmt::Debug, core::cmp::PartialEq)]
-pub enum BVState {
-    BothHigh,
-    B1HighB2Low,
-    B1LowB2High,
-    BothLow,
-}
+use hal::{adc, delay, gpio, prelude::*, serial, serial::Serial, stm32::UART4, stm32::USART2};
 
 pub struct AVI {
     //device: hal::stm32::Peripherals,
     //parts: GpioBankParts,
     pub digital_pins: DigitalPins,
     pub analog_pins: AnalogPins,
-    pub debug_rx: serial::Rx<USART3>,
-    pub debug_tx: serial::Tx<USART3>,
+    pub debug_rx: serial::Rx<USART2>,
+    pub debug_tx: serial::Tx<USART2>,
     pub conn_rx: serial::Rx<UART4>,
     pub conn_tx: serial::Tx<UART4>,
     pub led1: gpio::PF2<gpio::Output<gpio::OpenDrain>>,
@@ -46,60 +31,18 @@ struct GpioBankParts {
 }
 
 pub struct DigitalPins {
-    pub hpwr_en: gpio::PD12<gpio::Output<gpio::PushPull>>,
-    pub ideal_en1: gpio::PD14<gpio::Output<gpio::PushPull>>,
-    pub ideal_en2: gpio::PD15<gpio::Output<gpio::PushPull>>,
-
-    pub btm1_chrg: gpio::PD1<gpio::Input<gpio::Floating>>,
-    pub btm1_shdn: gpio::PD3<gpio::Output<gpio::PushPull>>,
-    pub btm1_susp: gpio::PD7<gpio::Output<gpio::PushPull>>,
-    pub btm1_pol: gpio::PD9<gpio::Input<gpio::Floating>>,
-    pub btm1_hpwr: gpio::PC8<gpio::Output<gpio::PushPull>>,
-
-    pub btm2_chrg: gpio::PD2<gpio::Input<gpio::Floating>>,
-    pub btm2_shdn: gpio::PD4<gpio::Output<gpio::PushPull>>,
-    pub btm2_susp: gpio::PD8<gpio::Output<gpio::PushPull>>,
-    pub btm2_pol: gpio::PD10<gpio::Input<gpio::Floating>>,
-    pub btm2_hpwr: gpio::PC9<gpio::Output<gpio::PushPull>>,
-
-    pub pg_solar: gpio::PD0<gpio::Input<gpio::Floating>>,
-    pub pg_3v3: gpio::PD13<gpio::Input<gpio::Floating>>,
-
-    pub pwr1: gpio::PF0<gpio::Output<gpio::OpenDrain>>,
-    pub pwr2: gpio::PF1<gpio::Output<gpio::OpenDrain>>,
-    pub pwr3: gpio::PF7<gpio::Output<gpio::OpenDrain>>,
-    pub pwr4: gpio::PF9<gpio::Output<gpio::OpenDrain>>,
-    pub pwr5: gpio::PF11<gpio::Output<gpio::OpenDrain>>,
-    pub pwr6: gpio::PF12<gpio::Output<gpio::OpenDrain>>,
-    pub pwr7: gpio::PF13<gpio::Output<gpio::OpenDrain>>,
-    pub pwr8: gpio::PF14<gpio::Output<gpio::OpenDrain>>,
-    pub pwr9: gpio::PF15<gpio::Output<gpio::OpenDrain>>,
-    pub pwr10: gpio::PE1<gpio::Output<gpio::OpenDrain>>,
-    pub pwr11: gpio::PE2<gpio::Output<gpio::OpenDrain>>,
-    pub pwr12: gpio::PE3<gpio::Output<gpio::OpenDrain>>,
-    pub pwr13: gpio::PE4<gpio::Output<gpio::PushPull>>,
-    pub pwr14: gpio::PE5<gpio::Output<gpio::OpenDrain>>,
-    pub pwr15: gpio::PE6<gpio::Output<gpio::OpenDrain>>,
-    pub pwr16: gpio::PE7<gpio::Output<gpio::OpenDrain>>,
-
-    pub hpwr1: gpio::PE8<gpio::Output<gpio::OpenDrain>>,
-    pub hpwr2: gpio::PE9<gpio::Output<gpio::OpenDrain>>,
+    pub temp_sensor_power: gpio::PE7<gpio::Output<gpio::PushPull>>,
 }
 
 pub struct AnalogPins {
-    pub battery1: gpio::PA4<gpio::Analog>,
-    pub battery2: gpio::PA5<gpio::Analog>,
-    pub solar1: gpio::PC0<gpio::Analog>,
-    pub solar2: gpio::PC1<gpio::Analog>,
-    pub solar3: gpio::PC2<gpio::Analog>,
-    pub solar4: gpio::PC3<gpio::Analog>,
-    pub solar5: gpio::PA2<gpio::Analog>,
-    pub solar6: gpio::PA3<gpio::Analog>,
-}
-
-pub enum PowerRails {
-    Rail1AvionicsStm = 0,
-    Rail13EpsStm = 12,
+    pub th1: gpio::PC2<gpio::Analog>,
+    pub th2: gpio::PC3<gpio::Analog>,
+    pub th3: gpio::PA0<gpio::Analog>,
+    pub th4: gpio::PA1<gpio::Analog>,
+    pub th5: gpio::PA2<gpio::Analog>,
+    pub th6: gpio::PA3<gpio::Analog>,
+    pub th7: gpio::PA4<gpio::Analog>,
+    pub th8: gpio::PA5<gpio::Analog>,
 }
 
 #[derive(core::default::Default)]
@@ -205,205 +148,60 @@ impl AVI {
             .into_push_pull_output(&mut bank.gpioe.moder, &mut bank.gpioe.otyper);
 
         let digital_pins = DigitalPins {
-            hpwr_en: bank
-                .gpiod
-                .pd12
-                .into_push_pull_output(&mut bank.gpiod.moder, &mut bank.gpiod.otyper),
-
-            ideal_en1: bank.gpiod.pd14.into_push_pull_output_with_state(
-                &mut bank.gpiod.moder,
-                &mut bank.gpiod.otyper,
-                gpio::State::High,
-            ),
-            ideal_en2: bank.gpiod.pd15.into_push_pull_output_with_state(
-                &mut bank.gpiod.moder,
-                &mut bank.gpiod.otyper,
-                gpio::State::Low,
-            ),
-
-            btm1_chrg: bank
-                .gpiod
-                .pd1
-                .into_floating_input(&mut bank.gpiod.moder, &mut bank.gpiod.pupdr),
-
-            btm1_shdn: bank
-                .gpiod
-                .pd3
-                .into_push_pull_output(&mut bank.gpiod.moder, &mut bank.gpiod.otyper),
-
-            btm1_susp: bank.gpiod.pd7.into_push_pull_output_with_state(
-                &mut bank.gpiod.moder,
-                &mut bank.gpiod.otyper,
-                gpio::State::Low,
-            ),
-
-            btm1_pol: bank
-                .gpiod
-                .pd9
-                .into_floating_input(&mut bank.gpiod.moder, &mut bank.gpiod.pupdr),
-            btm1_hpwr: bank.gpioc.pc8.into_push_pull_output_with_state(
-                &mut bank.gpioc.moder,
-                &mut bank.gpioc.otyper,
-                gpio::State::Low,
-            ),
-            btm2_chrg: bank
-                .gpiod
-                .pd2
-                .into_floating_input(&mut bank.gpiod.moder, &mut bank.gpiod.pupdr),
-            btm2_shdn: bank
-                .gpiod
-                .pd4
-                .into_push_pull_output(&mut bank.gpiod.moder, &mut bank.gpiod.otyper),
-            btm2_susp: bank.gpiod.pd8.into_push_pull_output_with_state(
-                &mut bank.gpiod.moder,
-                &mut bank.gpiod.otyper,
-                gpio::State::Low,
-            ),
-            btm2_pol: bank
-                .gpiod
-                .pd10
-                .into_floating_input(&mut bank.gpiod.moder, &mut bank.gpiod.pupdr),
-            btm2_hpwr: bank.gpioc.pc9.into_push_pull_output_with_state(
-                &mut bank.gpioc.moder,
-                &mut bank.gpioc.otyper,
-                gpio::State::Low,
-            ),
-            pg_solar: bank
-                .gpiod
-                .pd0
-                .into_floating_input(&mut bank.gpiod.moder, &mut bank.gpiod.pupdr),
-            pg_3v3: bank
-                .gpiod
-                .pd13
-                .into_floating_input(&mut bank.gpiod.moder, &mut bank.gpiod.pupdr),
-
-            pwr1: bank
-                .gpiof
-                .pf0
-                .into_open_drain_output(&mut bank.gpiof.moder, &mut bank.gpiof.otyper),
-            pwr2: bank
-                .gpiof
-                .pf1
-                .into_open_drain_output(&mut bank.gpiof.moder, &mut bank.gpiof.otyper),
-            pwr3: bank
-                .gpiof
-                .pf7
-                .into_open_drain_output(&mut bank.gpiof.moder, &mut bank.gpiof.otyper),
-            pwr4: bank
-                .gpiof
-                .pf9
-                .into_open_drain_output(&mut bank.gpiof.moder, &mut bank.gpiof.otyper),
-            pwr5: bank
-                .gpiof
-                .pf11
-                .into_open_drain_output(&mut bank.gpiof.moder, &mut bank.gpiof.otyper),
-            pwr6: bank
-                .gpiof
-                .pf12
-                .into_open_drain_output(&mut bank.gpiof.moder, &mut bank.gpiof.otyper),
-            pwr7: bank
-                .gpiof
-                .pf13
-                .into_open_drain_output(&mut bank.gpiof.moder, &mut bank.gpiof.otyper),
-            pwr8: bank
-                .gpiof
-                .pf14
-                .into_open_drain_output(&mut bank.gpiof.moder, &mut bank.gpiof.otyper),
-            pwr9: bank
-                .gpiof
-                .pf15
-                .into_open_drain_output(&mut bank.gpiof.moder, &mut bank.gpiof.otyper),
-            pwr10: bank
-                .gpioe
-                .pe1
-                .into_open_drain_output(&mut bank.gpioe.moder, &mut bank.gpioe.otyper),
-            pwr11: bank
-                .gpioe
-                .pe2
-                .into_open_drain_output(&mut bank.gpioe.moder, &mut bank.gpioe.otyper),
-            pwr12: bank
-                .gpioe
-                .pe3
-                .into_open_drain_output(&mut bank.gpioe.moder, &mut bank.gpioe.otyper),
-
-            // Must be set to high by default, since this controls the power to this chip.
-            // High==enable power
-            pwr13: bank.gpioe.pe4.into_push_pull_output_with_state(
+            temp_sensor_power: bank.gpioe.pe7.into_push_pull_output_with_state(
                 &mut bank.gpioe.moder,
                 &mut bank.gpioe.otyper,
-                gpio::State::High,
+                gpio::State::Low,
             ),
-            pwr14: bank
-                .gpioe
-                .pe5
-                .into_open_drain_output(&mut bank.gpioe.moder, &mut bank.gpioe.otyper),
-            pwr15: bank
-                .gpioe
-                .pe6
-                .into_open_drain_output(&mut bank.gpioe.moder, &mut bank.gpioe.otyper),
-            pwr16: bank
-                .gpioe
-                .pe7
-                .into_open_drain_output(&mut bank.gpioe.moder, &mut bank.gpioe.otyper),
-
-            hpwr1: bank
-                .gpioe
-                .pe8
-                .into_open_drain_output(&mut bank.gpioe.moder, &mut bank.gpioe.otyper),
-            hpwr2: bank
-                .gpioe
-                .pe9
-                .into_open_drain_output(&mut bank.gpioe.moder, &mut bank.gpioe.otyper),
         };
-        //let mut analog_pins = init_analog_pins(&mut bank);
 
         let analog_pins = AnalogPins {
-            battery1: bank
-                .gpioa
-                .pa4
-                .into_analog(&mut bank.gpioa.moder, &mut bank.gpioa.pupdr),
-            battery2: bank
-                .gpioa
-                .pa5
-                .into_analog(&mut bank.gpioa.moder, &mut bank.gpioa.pupdr),
-            solar1: bank
-                .gpioc
-                .pc0
-                .into_analog(&mut bank.gpioc.moder, &mut bank.gpioc.pupdr),
-            solar2: bank
-                .gpioc
-                .pc1
-                .into_analog(&mut bank.gpioc.moder, &mut bank.gpioc.pupdr),
-            solar3: bank
+            th1: bank
                 .gpioc
                 .pc2
                 .into_analog(&mut bank.gpioc.moder, &mut bank.gpioc.pupdr),
-            solar4: bank
+            th2: bank
                 .gpioc
                 .pc3
                 .into_analog(&mut bank.gpioc.moder, &mut bank.gpioc.pupdr),
-            solar5: bank
+            th3: bank
+                .gpioa
+                .pa0
+                .into_analog(&mut bank.gpioa.moder, &mut bank.gpioa.pupdr),
+            th4: bank
+                .gpioa
+                .pa1
+                .into_analog(&mut bank.gpioa.moder, &mut bank.gpioa.pupdr),
+            th5: bank
                 .gpioa
                 .pa2
                 .into_analog(&mut bank.gpioa.moder, &mut bank.gpioa.pupdr),
-            solar6: bank
+            th6: bank
                 .gpioa
                 .pa3
                 .into_analog(&mut bank.gpioa.moder, &mut bank.gpioa.pupdr),
+            th7: bank
+                .gpioa
+                .pa4
+                .into_analog(&mut bank.gpioa.moder, &mut bank.gpioa.pupdr),
+            th8: bank
+                .gpioa
+                .pa5
+                .into_analog(&mut bank.gpioa.moder, &mut bank.gpioa.pupdr),
         };
-        //let (debug_tx_pin, debug_rx_pin) = init_debug_serial_pins(&mut bank);
+
         let debug_tx_pin = bank
-            .gpiob
-            .pb10
-            .into_af7(&mut bank.gpiob.moder, &mut bank.gpiob.afrh);
+            .gpiod
+            .pd5
+            .into_af7(&mut bank.gpiod.moder, &mut bank.gpiod.afrl);
         let debug_rx_pin = bank
-            .gpiob
-            .pb11
-            .into_af7(&mut bank.gpiob.moder, &mut bank.gpiob.afrh);
+            .gpiod
+            .pd6
+            .into_af7(&mut bank.gpiod.moder, &mut bank.gpiod.afrl);
 
         // Setup the Serial abstraction for the debug interface
-        let mut debug_serial = Serial::usart3(
-            device.USART3,
+        let mut debug_serial = Serial::usart2(
+            device.USART2,
             (debug_tx_pin, debug_rx_pin),
             serial::Config::default().baudrate(9_600.bps()),
             clocks,
@@ -413,21 +211,18 @@ impl AVI {
         // Create the tx & rx handles
         let (debug_tx, debug_rx) = debug_serial.split();
 
-        //let (conn_tx_pin, conn_rx_pin) = init_conn_serial_pins(&mut bank);
         let conn_tx_pin = bank
-            .gpioa
-            .pa0
-            .into_af8(&mut bank.gpioa.moder, &mut bank.gpioa.afrl);
+            .gpioc
+            .pc10
+            .into_af8(&mut bank.gpioc.moder, &mut bank.gpioc.afrh);
         let conn_rx_pin = bank
-            .gpioa
-            .pa1
-            .into_af8(&mut bank.gpioa.moder, &mut bank.gpioa.afrl);
+            .gpioc
+            .pc11
+            .into_af8(&mut bank.gpioc.moder, &mut bank.gpioc.afrh);
         let mut conn_serial = Serial::uart4(
             device.UART4,
             (conn_tx_pin, conn_rx_pin),
-            serial::Config::default()
-                .baudrate(2_400.bps())
-                .oversampling(serial::Oversampling::Over8),
+            serial::Config::default().baudrate(9_600.bps()),
             clocks,
             &mut rcc.apb1r1,
         );

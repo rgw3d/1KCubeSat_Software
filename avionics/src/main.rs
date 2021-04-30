@@ -17,48 +17,35 @@ use arrayvec::ArrayString;
 use core::alloc::Layout;
 use core::convert::Infallible;
 use cortex_m_semihosting as _;
-use hal::{adc, delay, gpio, prelude::*, serial, stm32::UART4, stm32::USART3};
+use hal::{adc, delay, gpio, prelude::*, serial, stm32::UART4, stm32::USART2};
 use heapless::{consts::*, spsc, Vec};
 use nb::block;
 use panic_semihosting as _;
 use rtic::cyccnt::{Instant, U32Ext as _};
 pub mod protos;
 use protos::no_std::{
-    mod_EpsResponse, BatteryManagerState, BatteryManagerStates, BatteryVoltage,
+    mod_EpsResponse::OneOfresp, BatteryManagerState, BatteryManagerStates, BatteryVoltage,
     BatteryVoltageState, CommandID, EpsCommand, EpsResponse, RailState, SolarVoltage,
 };
 use quick_protobuf::{deserialize_from_slice, serialize_into_slice, MessageWrite};
 mod avi;
-use avi::{BMState, BVState, PowerRails};
 
 #[global_allocator]
 static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
 
 const BLINK_PERIOD: u32 = 8_000_000;
+const EPS_QUERY_PERIOD: u32 = 3_000_000;
 const UART_PARSE_PERIOD: u32 = 1_000_000;
-// ADC constants
-const ADC_NUM_STEPS: f32 = 4096.0;
-const ADC_MAX_VOLTAGE: f32 = 3.3;
-// Calculate Low battery voltage limit
-const BATTERY_VOLTAGE_LOWER_LIMIT_VOLTS: f32 = 3.0;
-const BATTERY_DIVIDER_RATIO: f32 = 0.6;
-const BATTERY_ADC_VOLTS_TO_COUNTS: f32 = BATTERY_DIVIDER_RATIO / ADC_MAX_VOLTAGE * ADC_NUM_STEPS;
-const BATTERY_ADC_COUNTS_TO_VOLTS: f32 = 1.0 / BATTERY_ADC_VOLTS_TO_COUNTS;
-const BATTERY_VOTLAGE_LOWER_LIMIT: u16 =
-    (BATTERY_VOLTAGE_LOWER_LIMIT_VOLTS * BATTERY_ADC_VOLTS_TO_COUNTS) as u16;
-// Low battery voltage hysteresis
-const LOW_BATTERY_HYSTERESIS_VOLTS: f32 = 0.1;
-const LOW_BATTERY_HYSTERESIS: u16 =
-    (LOW_BATTERY_HYSTERESIS_VOLTS / ADC_MAX_VOLTAGE * ADC_NUM_STEPS) as u16;
-const NUM_POWER_RAILS: usize = 19;
 
 #[rtic::app(device = hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
-        rx_prod: spsc::Producer<'static, EpsCommand, U8>,
-        rx_cons: spsc::Consumer<'static, EpsCommand, U8>,
-        debug_rx: serial::Rx<USART3>,
-        debug_tx: serial::Tx<USART3>,
+        rx_prod: spsc::Producer<'static, EpsResponse, U8>,
+        rx_cons: spsc::Consumer<'static, EpsResponse, U8>,
+        tx_prod: spsc::Producer<'static, EpsCommand, U8>,
+        tx_cons: spsc::Consumer<'static, EpsCommand, U8>,
+        debug_rx: serial::Rx<USART2>,
+        debug_tx: serial::Tx<USART2>,
         conn_rx: serial::Rx<UART4>,
         conn_tx: serial::Tx<UART4>,
         led1: gpio::PF2<gpio::Output<gpio::OpenDrain>>,
@@ -76,9 +63,10 @@ const APP: () = {
         uart_parse_vec: &'static mut Vec<u8, U1024>,
     }
 
-    #[init (schedule = [blinker, uart_buffer_clear], spawn = [blinker])]
+    #[init (schedule = [blinker, uart_buffer_clear, eps_query], spawn = [blinker])]
     fn init(cx: init::Context) -> init::LateResources {
-        static mut RX_QUEUE: spsc::Queue<EpsCommand, U8> = spsc::Queue(heapless::i::Queue::new());
+        static mut RX_QUEUE: spsc::Queue<EpsResponse, U8> = spsc::Queue(heapless::i::Queue::new());
+        static mut TX_QUEUE: spsc::Queue<EpsCommand, U8> = spsc::Queue(heapless::i::Queue::new());
         static mut UART_PARSE_VEC: Vec<u8, U1024> = Vec(heapless::i::Vec::new());
 
         // Setup the Allocator
@@ -100,8 +88,8 @@ const APP: () = {
         // Do the bulk of our initilization
         let mut avi = avi::AVI::init(device);
 
-        // turn off led2
-        avi.led2.set_high().ok();
+        // turn on led2
+        avi.led2.set_low().ok();
         // turn off led3
         avi.led3.set_high().ok();
         // turn off led4
@@ -116,9 +104,17 @@ const APP: () = {
         // Create the producer and consumer sides of the Queue
         let (rx_prod, rx_cons) = RX_QUEUE.split();
 
+        // Create the producer and consumer sides of the Queue
+        let (tx_prod, tx_cons) = TX_QUEUE.split();
+
         // Schedule the blinking LED function
         cx.schedule
             .blinker(cx.start + BLINK_PERIOD.cycles())
+            .unwrap();
+
+        // Schedule the EPS status request thread
+        cx.schedule
+            .eps_query(cx.start + EPS_QUERY_PERIOD.cycles())
             .unwrap();
 
         // Schedule the Uart clear buffer function (only runs once at start)
@@ -129,6 +125,8 @@ const APP: () = {
         init::LateResources {
             rx_prod,
             rx_cons,
+            tx_prod,
+            tx_cons,
             debug_rx: avi.debug_rx,
             debug_tx: avi.debug_tx,
             conn_rx: avi.conn_rx,
@@ -149,14 +147,16 @@ const APP: () = {
         }
     }
 
-    #[idle(resources = [adc, vref, analog_pins, debug_tx, rx_cons, watchdog_done, digital_pins, led3, delay])]
+    #[idle(resources = [adc, vref, analog_pins, conn_tx, debug_tx, rx_cons, tx_cons, watchdog_done, digital_pins, led3, delay])]
     fn idle(cx: idle::Context) -> ! {
         // Pull variables from the Context struct for conveinece.
         let rx_queue = cx.resources.rx_cons;
-        let tx = cx.resources.debug_tx;
+        let tx_queue = cx.resources.tx_cons;
+        let debug_tx = cx.resources.debug_tx;
+        let conn_tx = cx.resources.conn_tx;
         let adc = cx.resources.adc;
         let analog_pins = cx.resources.analog_pins;
-        let digital_pins = cx.resources.digital_pins;
+        let _digital_pins = cx.resources.digital_pins;
         let led3 = cx.resources.led3;
         let vref = cx.resources.vref;
         let delay = cx.resources.delay;
@@ -167,24 +167,29 @@ const APP: () = {
             // Measure state & save it somewhere
             //adc.calibrate(vref);
             adc.set_sample_time(adc::SampleTime::Cycles47_5);
-            let battery1 = adc.read(&mut analog_pins.battery1).unwrap();
-            let battery2 = adc.read(&mut analog_pins.battery2).unwrap();
-            let solar1 = adc.read(&mut analog_pins.solar1).unwrap();
-            let solar2 = adc.read(&mut analog_pins.solar2).unwrap();
-            let solar3 = adc.read(&mut analog_pins.solar3).unwrap();
-            let solar4 = adc.read(&mut analog_pins.solar4).unwrap();
-            let solar5 = adc.read(&mut analog_pins.solar5).unwrap();
-            let solar6 = adc.read(&mut analog_pins.solar6).unwrap();
-
-            let pg_solar = digital_pins.pg_solar.is_high().unwrap();
-            let _pg_3v3 = digital_pins.pg_3v3.is_high().unwrap();
+            let th1 = adc.read(&mut analog_pins.th1).unwrap();
+            let th2 = adc.read(&mut analog_pins.th2).unwrap();
+            let th3 = adc.read(&mut analog_pins.th3).unwrap();
+            let th4 = adc.read(&mut analog_pins.th4).unwrap();
+            let th5 = adc.read(&mut analog_pins.th5).unwrap();
+            let th6 = adc.read(&mut analog_pins.th6).unwrap();
+            let th7 = adc.read(&mut analog_pins.th6).unwrap();
+            let th8 = adc.read(&mut analog_pins.th6).unwrap();
 
             //
             // 2)
-            // Run Battery manager state machine
 
             //
             // 3)
+            // Send any commands to the EPS
+            // Only send one at a time
+            if let Some(eps_command) = tx_queue.dequeue() {
+                let mut tmp_buf = [0u8; 1024];
+                serialize_into_slice(&eps_command, &mut tmp_buf).ok();
+                for elem in tmp_buf.iter().take(eps_command.get_size() + 1) {
+                    block!(conn_tx.write(*elem)).unwrap();
+                }
+            }
 
             //
             // 4)
@@ -198,6 +203,18 @@ const APP: () = {
                     CommandID::GetBatteryVoltageState => {}
                     CommandID::GetBatteryManagerState => {}
                 };
+
+                let mut test_str_buffer = ArrayString::<512>::new();
+                core::fmt::write(
+                    &mut test_str_buffer,
+                    format_args!("parsed message from EPS: {:?}\n\r", eps_response),
+                )
+                .unwrap();
+
+                // Write string buffer out to UART
+                for c in test_str_buffer.as_str().bytes() {
+                    block!(debug_tx.write(c)).unwrap();
+                }
             }
 
             //
@@ -213,9 +230,9 @@ const APP: () = {
     }
 
     // This task and uart_parse_active share the same priority, so they can't pre-empt each other
-    #[task(binds = USART3, resources = [led5, debug_rx, rx_prod, uart_parse_active, uart_parse_vec], schedule = [uart_buffer_clear], priority = 3)]
-    fn usart3(cx: usart3::Context) {
-        let rx = cx.resources.debug_rx;
+    #[task(binds = UART4, resources = [led5, conn_rx, rx_prod, uart_parse_active, uart_parse_vec], schedule = [uart_buffer_clear], priority = 3)]
+    fn uart4(cx: uart4::Context) {
+        let rx = cx.resources.conn_rx;
         let queue = cx.resources.rx_prod;
         let uart_parse_active = cx.resources.uart_parse_active;
         let uart_parse_vec = cx.resources.uart_parse_vec;
@@ -275,6 +292,40 @@ const APP: () = {
         // Schedule
         cx.schedule
             .blinker(cx.scheduled + BLINK_PERIOD.cycles())
+            .unwrap();
+    }
+
+    #[task(resources = [tx_prod], schedule = [eps_query], priority = 1)]
+    fn eps_query(cx: eps_query::Context) {
+        static mut CMD_TO_SEND: u8 = 0;
+        let tx_prod = cx.resources.tx_prod;
+
+        //cortex_m::asm::bkpt();
+        let cmd = match *CMD_TO_SEND {
+            1 => EpsCommand {
+                cid: CommandID::GetSolarVoltage,
+                railState: None,
+            },
+            2 => EpsCommand {
+                cid: CommandID::GetBatteryVoltageState,
+                railState: None,
+            },
+            3 => EpsCommand {
+                cid: CommandID::GetBatteryManagerState,
+                railState: None,
+            },
+            _ => EpsCommand {
+                cid: CommandID::GetBatteryVoltage,
+                railState: None,
+            },
+        };
+        *CMD_TO_SEND = (*CMD_TO_SEND + 1) % 4;
+
+        tx_prod.enqueue(cmd).ok();
+
+        // Schedule
+        cx.schedule
+            .eps_query(cx.scheduled + EPS_QUERY_PERIOD.cycles())
             .unwrap();
     }
 
