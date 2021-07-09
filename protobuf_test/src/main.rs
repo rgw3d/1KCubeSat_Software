@@ -7,13 +7,14 @@ use messages::{
 extern crate byteorder;
 use byteorder::{ByteOrder, LittleEndian};
 
+const SLEEP_TIME_BETWEEN_COMMANDS: u64 = 50;
+
 fn main() {
     println!("Start");
     let mut port = serialport::new("/dev/ttyUSB0", 9_600)
         .timeout(Duration::from_millis(10))
         .open()
         .expect("Failed to open port");
-    const SLEEP_TIME_BETWEEN_COMMANDS: u64 = 50;
     //
     //
     // Get Power rail 1 state, should be on (STM rail)
@@ -80,6 +81,20 @@ fn main() {
     }
     thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
 
+    set_power_rail(PowerRails::Rail3, &mut port);
+    set_power_rail(PowerRails::Rail4, &mut port);
+    set_power_rail(PowerRails::Rail5, &mut port);
+    set_power_rail(PowerRails::Rail6, &mut port);
+    set_power_rail(PowerRails::Rail7, &mut port);
+    set_power_rail(PowerRails::Rail8, &mut port);
+    set_power_rail(PowerRails::Rail9, &mut port);
+    set_power_rail(PowerRails::Rail10, &mut port);
+    set_power_rail(PowerRails::Rail11, &mut port);
+    set_power_rail(PowerRails::Rail12, &mut port);
+    set_power_rail(PowerRails::Rail14, &mut port);
+    set_power_rail(PowerRails::Rail15, &mut port);
+    set_power_rail(PowerRails::Rail16, &mut port);
+
     //
     //
     // Get power rail 2, make sure it is on
@@ -105,43 +120,43 @@ fn main() {
     //
     //
     // Set power rail 2 to off
-    let cmd = EpsCommand {
-        cid: CommandID::SetPowerRailState,
-        railState: Some(RailState {
-            railIdx: PowerRails::Rail2,
-            railState: false,
-        }),
-    };
-    let expected_resp = EpsResponse {
-        cid: CommandID::SetPowerRailState,
-        resp: OneOfresp::None,
-    };
-    if let Ok(resp) = send_eps_command(&mut port, cmd) {
-        assert_eq!(resp, expected_resp);
-    }
-    thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
+    // let cmd = EpsCommand {
+    //     cid: CommandID::SetPowerRailState,
+    //     railState: Some(RailState {
+    //         railIdx: PowerRails::Rail2,
+    //         railState: false,
+    //     }),
+    // };
+    // let expected_resp = EpsResponse {
+    //     cid: CommandID::SetPowerRailState,
+    //     resp: OneOfresp::None,
+    // };
+    // if let Ok(resp) = send_eps_command(&mut port, cmd) {
+    //     assert_eq!(resp, expected_resp);
+    // }
+    // thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
 
-    //
-    //
-    // Get power rail 2, make sure it is off
-    let cmd = EpsCommand {
-        cid: CommandID::GetPowerRailState,
-        railState: Some(RailState {
-            railIdx: PowerRails::Rail2,
-            railState: false,
-        }),
-    };
-    let expected_resp = EpsResponse {
-        cid: CommandID::GetPowerRailState,
-        resp: OneOfresp::railState(RailState {
-            railIdx: PowerRails::Rail2,
-            railState: false,
-        }),
-    };
-    if let Ok(resp) = send_eps_command(&mut port, cmd) {
-        assert_eq!(resp, expected_resp);
-    }
-    thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
+    // //
+    // //
+    // // Get power rail 2, make sure it is off
+    // let cmd = EpsCommand {
+    //     cid: CommandID::GetPowerRailState,
+    //     railState: Some(RailState {
+    //         railIdx: PowerRails::Rail2,
+    //         railState: false,
+    //     }),
+    // };
+    // let expected_resp = EpsResponse {
+    //     cid: CommandID::GetPowerRailState,
+    //     resp: OneOfresp::railState(RailState {
+    //         railIdx: PowerRails::Rail2,
+    //         railState: false,
+    //     }),
+    // };
+    // if let Ok(resp) = send_eps_command(&mut port, cmd) {
+    //     assert_eq!(resp, expected_resp);
+    // }
+    // thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
 
     //
     //
@@ -196,6 +211,26 @@ fn main() {
         if let OneOfresp::batteryManagerStates(_) = resp.resp {
             println!("Pass!");
         }
+    }
+    thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
+}
+
+fn set_power_rail(rail: PowerRails, port: &mut std::boxed::Box<dyn serialport::SerialPort>) {
+    // //
+    // Set power rail 5 to on
+    let cmd = EpsCommand {
+        cid: CommandID::SetPowerRailState,
+        railState: Some(RailState {
+            railIdx: rail,
+            railState: true,
+        }),
+    };
+    let expected_resp = EpsResponse {
+        cid: CommandID::SetPowerRailState,
+        resp: OneOfresp::None,
+    };
+    if let Ok(resp) = send_eps_command(port, cmd) {
+        assert_eq!(resp, expected_resp);
     }
     thread::sleep(Duration::from_millis(SLEEP_TIME_BETWEEN_COMMANDS));
 }

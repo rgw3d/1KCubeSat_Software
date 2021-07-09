@@ -149,11 +149,11 @@ const APP: () = {
         }
     }
 
-    #[idle(resources = [adc, vref, analog_pins, debug_tx, rx_cons, watchdog_done, digital_pins, led3, delay])]
+    #[idle(resources = [adc, vref, analog_pins, conn_tx, debug_tx, rx_cons, watchdog_done, digital_pins, led3, delay])]
     fn idle(cx: idle::Context) -> ! {
         // Pull variables from the Context struct for conveinece.
         let rx_queue = cx.resources.rx_cons;
-        let tx = cx.resources.debug_tx;
+        let tx = cx.resources.conn_tx;
         let adc = cx.resources.adc;
         let analog_pins = cx.resources.analog_pins;
         let digital_pins = cx.resources.digital_pins;
@@ -377,9 +377,9 @@ const APP: () = {
     }
 
     // This task and uart_parse_active share the same priority, so they can't pre-empt each other
-    #[task(binds = USART3, resources = [led5, debug_rx, rx_prod, uart_parse_active, uart_parse_vec], schedule = [uart_buffer_clear], priority = 3)]
+    #[task(binds = UART4, resources = [led5, debug_rx, conn_rx, rx_prod, uart_parse_active, uart_parse_vec], schedule = [uart_buffer_clear], priority = 3)]
     fn usart3(cx: usart3::Context) {
-        let rx = cx.resources.debug_rx;
+        let rx = cx.resources.conn_rx;
         let queue = cx.resources.rx_prod;
         let uart_parse_active = cx.resources.uart_parse_active;
         let uart_parse_vec = cx.resources.uart_parse_vec;

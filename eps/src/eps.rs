@@ -424,9 +424,7 @@ impl EPS {
         let mut conn_serial = Serial::uart4(
             device.UART4,
             (conn_tx_pin, conn_rx_pin),
-            serial::Config::default()
-                .baudrate(2_400.bps())
-                .oversampling(serial::Oversampling::Over8),
+            serial::Config::default().baudrate(9_600.bps()),
             clocks,
             &mut rcc.apb1r1,
         );
