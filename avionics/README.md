@@ -22,7 +22,7 @@ C and C++ based development for STM32 platforms is very well established, and is
 
 ### Actually getting the above tooling to work
 
-I complain about this in the [EPS](../eps) README
+I complain about this in the [EPS README](../eps)
 
 ## Manually install on target MCU
 
@@ -47,3 +47,8 @@ To make this work with Rust, and in a no-std environment, I use [quick-protobuf]
 ## [`cortex-m-quickstart`](https://github.com/rust-embedded/cortex-m-quickstart)
 
 > See the cortex-m-quickstart repository for a template used to generate this repo
+
+## Pictures
+
+![Avionics Board front](../pictures/avi_front.jpg)
+![Avionics Board back](../pictures/avi_back.jpg)

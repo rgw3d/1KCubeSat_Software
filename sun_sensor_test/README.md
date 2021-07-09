@@ -3,6 +3,7 @@
 This repo contains rust code to run on the IC of my Sun Sensor Test board, which I'm using to test a sensor for my $1K Cubesat. Hardware design files for this board can be found [in the 1KCubeSat Hardware repo](https://github.com/rgw3d/1KCubeSat_Hardware/tree/master/sun_sensor_test)
 
 The IC used is the STM32L051R8
+![Sun Sensor Hardware](../pictures/sun_sensor.jpg)
 
 ## Why Rust?
 

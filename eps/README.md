@@ -58,3 +58,7 @@ To make this work with Rust, and in a no-std environment, I use [quick-protobuf]
 ## [`cortex-m-quickstart`](https://github.com/rust-embedded/cortex-m-quickstart)
 
 > See the cortex-m-quickstart repository for a template used to generate this repo
+
+## Pictures
+
+![Avionics Board front](../pictures/eps.jpg)
