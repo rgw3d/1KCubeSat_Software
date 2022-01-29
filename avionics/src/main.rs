@@ -24,8 +24,10 @@ use panic_semihosting as _;
 use rtic::cyccnt::{Instant, U32Ext as _};
 pub mod protos;
 use protos::no_std::{
-    mod_EpsResponse::OneOfresp, BatteryManagerState, BatteryManagerStates, BatteryVoltage,
-    BatteryVoltageState, CommandID, EpsCommand, EpsResponse, RailState, SolarVoltage,
+    mod_EpsResponse::OneOfresp, mod_RadioTelemetry, mod_RadioTelemetry::OneOfmessage,
+    BatteryManagerState, BatteryManagerStates, BatteryVoltage, BatteryVoltageState, CommandID,
+    EpsCommand, EpsResponse, PowerRails, RadioSOH, RadioTelemetry, RailSOH, RailState,
+    SolarVoltage, TelemetryID,
 };
 use quick_protobuf::{deserialize_from_slice, serialize_into_slice, MessageWrite};
 mod avi;
@@ -161,71 +163,184 @@ const APP: () = {
         let vref = cx.resources.vref;
         let delay = cx.resources.delay;
 
+        // Radio telemetry stuct sent to the radio
+        let mut radioTelemetry = RadioTelemetry {
+            tid: TelemetryID::SOH,
+            message: mod_RadioTelemetry::OneOfmessage::soh(RadioSOH {
+                batteryVoltage: Some(BatteryVoltage {
+                    battery1: 0,
+                    battery2: 0,
+                }),
+                solarVoltage: Some(SolarVoltage {
+                    side1: 0,
+                    side2: 0,
+                    side3: 0,
+                    side4: 0,
+                    side5: 0,
+                    side6: 0,
+                }),
+                batteryVoltageState: BatteryVoltageState::BothLow,
+                batteryManagerStates: Some(BatteryManagerStates {
+                    battery1State: BatteryManagerState::Suspended,
+                    battery2State: BatteryManagerState::Suspended,
+                }),
+                railSoh: Some(RailSOH {
+                    rail1: false,
+                    rail2: false,
+                    rail3: false,
+                    rail4: false,
+                    rail5: false,
+                    rail6: false,
+                    rail7: false,
+                    rail8: false,
+                    rail9: false,
+                    rail10: false,
+                    rail11: false,
+                    rail12: false,
+                    rail13: false,
+                    rail14: false,
+                    rail15: false,
+                    rail16: false,
+                    hpwr1: false,
+                    hpwr2: false,
+                    hpwrEn: false,
+                }),
+            }),
+        };
+        if let OneOfmessage::soh(ref mut radioSoh) = radioTelemetry.message {
+            loop {
+                //
+                // 1)
+                // Measure state & save it somewhere
+                //adc.calibrate(vref);
+                adc.set_sample_time(adc::SampleTime::Cycles47_5);
+                let th1 = adc.read(&mut analog_pins.th1).unwrap();
+                let th2 = adc.read(&mut analog_pins.th2).unwrap();
+                let th3 = adc.read(&mut analog_pins.th3).unwrap();
+                let th4 = adc.read(&mut analog_pins.th4).unwrap();
+                let th5 = adc.read(&mut analog_pins.th5).unwrap();
+                let th6 = adc.read(&mut analog_pins.th6).unwrap();
+                let th7 = adc.read(&mut analog_pins.th6).unwrap();
+                let th8 = adc.read(&mut analog_pins.th6).unwrap();
+
+                //
+                // 2)
+
+                //
+                // 3)
+                // Send any commands to the EPS
+                // Only send one at a time
+                if let Some(eps_command) = tx_queue.dequeue() {
+                    let mut tmp_buf = [0u8; 1024];
+                    serialize_into_slice(&eps_command, &mut tmp_buf).ok();
+                    for elem in tmp_buf.iter().take(eps_command.get_size() + 1) {
+                        block!(conn_tx.write(*elem)).unwrap();
+                    }
+                }
+
+                //
+                // 4)
+                // Loop over any responses we may have recieved and update state
+                while let Some(eps_response) = rx_queue.dequeue() {
+                    match eps_response.cid {
+                        CommandID::SetPowerRailState => { /* Do nothing, this response is just an ACK*/
+                        }
+                        // Update our internal storage with the rail state
+                        CommandID::GetPowerRailState => match eps_response.resp {
+                            OneOfresp::railState(ref rs) => {
+                                if let Some(ref mut railSoh) = radioSoh.railSoh {
+                                    match rs.railIdx {
+                                        // This ought to be an index into an array, but it works fine as is.
+                                        PowerRails::Rail1 => railSoh.rail1 = rs.railState,
+                                        PowerRails::Rail2 => railSoh.rail2 = rs.railState,
+                                        PowerRails::Rail3 => railSoh.rail3 = rs.railState,
+                                        PowerRails::Rail4 => railSoh.rail4 = rs.railState,
+                                        PowerRails::Rail5 => railSoh.rail5 = rs.railState,
+                                        PowerRails::Rail6 => railSoh.rail6 = rs.railState,
+                                        PowerRails::Rail7 => railSoh.rail7 = rs.railState,
+                                        PowerRails::Rail8 => railSoh.rail8 = rs.railState,
+                                        PowerRails::Rail9 => railSoh.rail9 = rs.railState,
+                                        PowerRails::Rail10 => railSoh.rail10 = rs.railState,
+                                        PowerRails::Rail11 => railSoh.rail11 = rs.railState,
+                                        PowerRails::Rail12 => railSoh.rail12 = rs.railState,
+                                        PowerRails::Rail13 => railSoh.rail13 = rs.railState,
+                                        PowerRails::Rail14 => railSoh.rail14 = rs.railState,
+                                        PowerRails::Rail15 => railSoh.rail15 = rs.railState,
+                                        PowerRails::Rail16 => railSoh.rail16 = rs.railState,
+                                        PowerRails::Hpwr1 => railSoh.hpwr1 = rs.railState,
+                                        PowerRails::Hpwr2 => railSoh.hpwr2 = rs.railState,
+                                        PowerRails::HpwrEn => railSoh.hpwrEn = rs.railState,
+                                    }
+                                }
+                            }
+                            OneOfresp::None => {}
+                            _ => {}
+                        },
+                        CommandID::GetBatteryVoltage => {
+                            if let OneOfresp::batteryVoltage(ref bv) = eps_response.resp {
+                                if let Some(ref mut batteryVoltage) = radioSoh.batteryVoltage {
+                                    batteryVoltage.battery1 = bv.battery1;
+                                    batteryVoltage.battery2 = bv.battery2;
+                                }
+                            }
+                        }
+                        CommandID::GetSolarVoltage => {
+                            if let OneOfresp::solarVoltage(ref sv) = eps_response.resp {
+                                if let Some(ref mut solarVoltage) = radioSoh.solarVoltage {
+                                    solarVoltage.side1 = sv.side1;
+                                    solarVoltage.side2 = sv.side2;
+                                    solarVoltage.side3 = sv.side3;
+                                    solarVoltage.side4 = sv.side4;
+                                    solarVoltage.side5 = sv.side5;
+                                    solarVoltage.side6 = sv.side6;
+                                }
+                            }
+                        }
+                        CommandID::GetBatteryVoltageState => {
+                            if let OneOfresp::batteryVoltageState(ref bvs) = eps_response.resp {
+                                radioSoh.batteryVoltageState = *bvs;
+                            }
+                        }
+                        CommandID::GetBatteryManagerState => {
+                            if let OneOfresp::batteryManagerStates(ref bms) = eps_response.resp {
+                                if let Some(ref mut batteryManagerStates) =
+                                    radioSoh.batteryManagerStates
+                                {
+                                    batteryManagerStates.battery1State = bms.battery1State;
+                                    batteryManagerStates.battery2State = bms.battery2State;
+                                }
+                            }
+                        }
+                    };
+
+                    let mut test_str_buffer = ArrayString::<512>::new();
+                    core::fmt::write(
+                        &mut test_str_buffer,
+                        format_args!("parsed message from EPS: {:?}\n\r", eps_response),
+                    )
+                    .unwrap();
+
+                    // Write string buffer out to UART
+                    for c in test_str_buffer.as_str().bytes() {
+                        block!(debug_tx.write(c)).unwrap();
+                    }
+                }
+
+                //
+                // 5)
+                // Pet watchdog
+                pet_watchdog(cx.resources.watchdog_done);
+
+                //
+                // 6)
+                // Sleep
+                delay.delay_ms(20u32);
+            }
+        }
+
+        // Should not return
         loop {
-            //
-            // 1)
-            // Measure state & save it somewhere
-            //adc.calibrate(vref);
-            adc.set_sample_time(adc::SampleTime::Cycles47_5);
-            let th1 = adc.read(&mut analog_pins.th1).unwrap();
-            let th2 = adc.read(&mut analog_pins.th2).unwrap();
-            let th3 = adc.read(&mut analog_pins.th3).unwrap();
-            let th4 = adc.read(&mut analog_pins.th4).unwrap();
-            let th5 = adc.read(&mut analog_pins.th5).unwrap();
-            let th6 = adc.read(&mut analog_pins.th6).unwrap();
-            let th7 = adc.read(&mut analog_pins.th6).unwrap();
-            let th8 = adc.read(&mut analog_pins.th6).unwrap();
-
-            //
-            // 2)
-
-            //
-            // 3)
-            // Send any commands to the EPS
-            // Only send one at a time
-            if let Some(eps_command) = tx_queue.dequeue() {
-                let mut tmp_buf = [0u8; 1024];
-                serialize_into_slice(&eps_command, &mut tmp_buf).ok();
-                for elem in tmp_buf.iter().take(eps_command.get_size() + 1) {
-                    block!(conn_tx.write(*elem)).unwrap();
-                }
-            }
-
-            //
-            // 4)
-            // Loop over any responses we may have recieved and update state
-            while let Some(eps_response) = rx_queue.dequeue() {
-                match eps_response.cid {
-                    CommandID::SetPowerRailState => {}
-                    CommandID::GetPowerRailState => {}
-                    CommandID::GetBatteryVoltage => {}
-                    CommandID::GetSolarVoltage => {}
-                    CommandID::GetBatteryVoltageState => {}
-                    CommandID::GetBatteryManagerState => {}
-                };
-
-                let mut test_str_buffer = ArrayString::<512>::new();
-                core::fmt::write(
-                    &mut test_str_buffer,
-                    format_args!("parsed message from EPS: {:?}\n\r", eps_response),
-                )
-                .unwrap();
-
-                // Write string buffer out to UART
-                for c in test_str_buffer.as_str().bytes() {
-                    block!(debug_tx.write(c)).unwrap();
-                }
-            }
-
-            //
-            // 5)
-            // Pet watchdog
-            pet_watchdog(cx.resources.watchdog_done);
-
-            //
-            // 6)
-            // Sleep
-            delay.delay_ms(20u32);
+            cortex_m::asm::bkpt();
         }
     }
 

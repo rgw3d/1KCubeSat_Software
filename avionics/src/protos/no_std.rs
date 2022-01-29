@@ -213,6 +213,35 @@ impl<'a> From<&'a str> for BatteryManagerState {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum TelemetryID {
+    SOH = 0,
+}
+
+impl Default for TelemetryID {
+    fn default() -> Self {
+        TelemetryID::SOH
+    }
+}
+
+impl From<i32> for TelemetryID {
+    fn from(i: i32) -> Self {
+        match i {
+            0 => TelemetryID::SOH,
+            _ => Self::default(),
+        }
+    }
+}
+
+impl<'a> From<&'a str> for TelemetryID {
+    fn from(s: &'a str) -> Self {
+        match s {
+            "SOH" => TelemetryID::SOH,
+            _ => Self::default(),
+        }
+    }
+}
+
 #[derive(Debug, Default, PartialEq, Clone)]
 pub struct RailState {
     pub railIdx: protos::no_std::PowerRails,
@@ -471,6 +500,212 @@ pub enum OneOfresp {
 impl Default for OneOfresp {
     fn default() -> Self {
         OneOfresp::None
+    }
+}
+
+}
+
+#[derive(Debug, Default, PartialEq, Clone)]
+pub struct RailSOH {
+    pub rail1: bool,
+    pub rail2: bool,
+    pub rail3: bool,
+    pub rail4: bool,
+    pub rail5: bool,
+    pub rail6: bool,
+    pub rail7: bool,
+    pub rail8: bool,
+    pub rail9: bool,
+    pub rail10: bool,
+    pub rail11: bool,
+    pub rail12: bool,
+    pub rail13: bool,
+    pub rail14: bool,
+    pub rail15: bool,
+    pub rail16: bool,
+    pub hpwr1: bool,
+    pub hpwr2: bool,
+    pub hpwrEn: bool,
+}
+
+impl<'a> MessageRead<'a> for RailSOH {
+    fn from_reader(r: &mut BytesReader, bytes: &'a [u8]) -> Result<Self> {
+        let mut msg = Self::default();
+        while !r.is_eof() {
+            match r.next_tag(bytes) {
+                Ok(8) => msg.rail1 = r.read_bool(bytes)?,
+                Ok(16) => msg.rail2 = r.read_bool(bytes)?,
+                Ok(24) => msg.rail3 = r.read_bool(bytes)?,
+                Ok(32) => msg.rail4 = r.read_bool(bytes)?,
+                Ok(40) => msg.rail5 = r.read_bool(bytes)?,
+                Ok(48) => msg.rail6 = r.read_bool(bytes)?,
+                Ok(56) => msg.rail7 = r.read_bool(bytes)?,
+                Ok(64) => msg.rail8 = r.read_bool(bytes)?,
+                Ok(72) => msg.rail9 = r.read_bool(bytes)?,
+                Ok(80) => msg.rail10 = r.read_bool(bytes)?,
+                Ok(88) => msg.rail11 = r.read_bool(bytes)?,
+                Ok(96) => msg.rail12 = r.read_bool(bytes)?,
+                Ok(104) => msg.rail13 = r.read_bool(bytes)?,
+                Ok(112) => msg.rail14 = r.read_bool(bytes)?,
+                Ok(120) => msg.rail15 = r.read_bool(bytes)?,
+                Ok(128) => msg.rail16 = r.read_bool(bytes)?,
+                Ok(136) => msg.hpwr1 = r.read_bool(bytes)?,
+                Ok(144) => msg.hpwr2 = r.read_bool(bytes)?,
+                Ok(152) => msg.hpwrEn = r.read_bool(bytes)?,
+                Ok(t) => { r.read_unknown(bytes, t)?; }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(msg)
+    }
+}
+
+impl MessageWrite for RailSOH {
+    fn get_size(&self) -> usize {
+        0
+        + if self.rail1 == false { 0 } else { 1 + sizeof_varint(*(&self.rail1) as u64) }
+        + if self.rail2 == false { 0 } else { 1 + sizeof_varint(*(&self.rail2) as u64) }
+        + if self.rail3 == false { 0 } else { 1 + sizeof_varint(*(&self.rail3) as u64) }
+        + if self.rail4 == false { 0 } else { 1 + sizeof_varint(*(&self.rail4) as u64) }
+        + if self.rail5 == false { 0 } else { 1 + sizeof_varint(*(&self.rail5) as u64) }
+        + if self.rail6 == false { 0 } else { 1 + sizeof_varint(*(&self.rail6) as u64) }
+        + if self.rail7 == false { 0 } else { 1 + sizeof_varint(*(&self.rail7) as u64) }
+        + if self.rail8 == false { 0 } else { 1 + sizeof_varint(*(&self.rail8) as u64) }
+        + if self.rail9 == false { 0 } else { 1 + sizeof_varint(*(&self.rail9) as u64) }
+        + if self.rail10 == false { 0 } else { 1 + sizeof_varint(*(&self.rail10) as u64) }
+        + if self.rail11 == false { 0 } else { 1 + sizeof_varint(*(&self.rail11) as u64) }
+        + if self.rail12 == false { 0 } else { 1 + sizeof_varint(*(&self.rail12) as u64) }
+        + if self.rail13 == false { 0 } else { 1 + sizeof_varint(*(&self.rail13) as u64) }
+        + if self.rail14 == false { 0 } else { 1 + sizeof_varint(*(&self.rail14) as u64) }
+        + if self.rail15 == false { 0 } else { 1 + sizeof_varint(*(&self.rail15) as u64) }
+        + if self.rail16 == false { 0 } else { 2 + sizeof_varint(*(&self.rail16) as u64) }
+        + if self.hpwr1 == false { 0 } else { 2 + sizeof_varint(*(&self.hpwr1) as u64) }
+        + if self.hpwr2 == false { 0 } else { 2 + sizeof_varint(*(&self.hpwr2) as u64) }
+        + if self.hpwrEn == false { 0 } else { 2 + sizeof_varint(*(&self.hpwrEn) as u64) }
+    }
+
+    fn write_message<W: WriterBackend>(&self, w: &mut Writer<W>) -> Result<()> {
+        if self.rail1 != false { w.write_with_tag(8, |w| w.write_bool(*&self.rail1))?; }
+        if self.rail2 != false { w.write_with_tag(16, |w| w.write_bool(*&self.rail2))?; }
+        if self.rail3 != false { w.write_with_tag(24, |w| w.write_bool(*&self.rail3))?; }
+        if self.rail4 != false { w.write_with_tag(32, |w| w.write_bool(*&self.rail4))?; }
+        if self.rail5 != false { w.write_with_tag(40, |w| w.write_bool(*&self.rail5))?; }
+        if self.rail6 != false { w.write_with_tag(48, |w| w.write_bool(*&self.rail6))?; }
+        if self.rail7 != false { w.write_with_tag(56, |w| w.write_bool(*&self.rail7))?; }
+        if self.rail8 != false { w.write_with_tag(64, |w| w.write_bool(*&self.rail8))?; }
+        if self.rail9 != false { w.write_with_tag(72, |w| w.write_bool(*&self.rail9))?; }
+        if self.rail10 != false { w.write_with_tag(80, |w| w.write_bool(*&self.rail10))?; }
+        if self.rail11 != false { w.write_with_tag(88, |w| w.write_bool(*&self.rail11))?; }
+        if self.rail12 != false { w.write_with_tag(96, |w| w.write_bool(*&self.rail12))?; }
+        if self.rail13 != false { w.write_with_tag(104, |w| w.write_bool(*&self.rail13))?; }
+        if self.rail14 != false { w.write_with_tag(112, |w| w.write_bool(*&self.rail14))?; }
+        if self.rail15 != false { w.write_with_tag(120, |w| w.write_bool(*&self.rail15))?; }
+        if self.rail16 != false { w.write_with_tag(128, |w| w.write_bool(*&self.rail16))?; }
+        if self.hpwr1 != false { w.write_with_tag(136, |w| w.write_bool(*&self.hpwr1))?; }
+        if self.hpwr2 != false { w.write_with_tag(144, |w| w.write_bool(*&self.hpwr2))?; }
+        if self.hpwrEn != false { w.write_with_tag(152, |w| w.write_bool(*&self.hpwrEn))?; }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Clone)]
+pub struct RadioSOH {
+    pub batteryVoltage: Option<protos::no_std::BatteryVoltage>,
+    pub solarVoltage: Option<protos::no_std::SolarVoltage>,
+    pub batteryVoltageState: protos::no_std::BatteryVoltageState,
+    pub batteryManagerStates: Option<protos::no_std::BatteryManagerStates>,
+    pub railSoh: Option<protos::no_std::RailSOH>,
+}
+
+impl<'a> MessageRead<'a> for RadioSOH {
+    fn from_reader(r: &mut BytesReader, bytes: &'a [u8]) -> Result<Self> {
+        let mut msg = Self::default();
+        while !r.is_eof() {
+            match r.next_tag(bytes) {
+                Ok(10) => msg.batteryVoltage = Some(r.read_message::<protos::no_std::BatteryVoltage>(bytes)?),
+                Ok(18) => msg.solarVoltage = Some(r.read_message::<protos::no_std::SolarVoltage>(bytes)?),
+                Ok(24) => msg.batteryVoltageState = r.read_enum(bytes)?,
+                Ok(34) => msg.batteryManagerStates = Some(r.read_message::<protos::no_std::BatteryManagerStates>(bytes)?),
+                Ok(42) => msg.railSoh = Some(r.read_message::<protos::no_std::RailSOH>(bytes)?),
+                Ok(t) => { r.read_unknown(bytes, t)?; }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(msg)
+    }
+}
+
+impl MessageWrite for RadioSOH {
+    fn get_size(&self) -> usize {
+        0
+        + self.batteryVoltage.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
+        + self.solarVoltage.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
+        + if self.batteryVoltageState == protos::no_std::BatteryVoltageState::BothHigh { 0 } else { 1 + sizeof_varint(*(&self.batteryVoltageState) as u64) }
+        + self.batteryManagerStates.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
+        + self.railSoh.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
+    }
+
+    fn write_message<W: WriterBackend>(&self, w: &mut Writer<W>) -> Result<()> {
+        if let Some(ref s) = self.batteryVoltage { w.write_with_tag(10, |w| w.write_message(s))?; }
+        if let Some(ref s) = self.solarVoltage { w.write_with_tag(18, |w| w.write_message(s))?; }
+        if self.batteryVoltageState != protos::no_std::BatteryVoltageState::BothHigh { w.write_with_tag(24, |w| w.write_enum(*&self.batteryVoltageState as i32))?; }
+        if let Some(ref s) = self.batteryManagerStates { w.write_with_tag(34, |w| w.write_message(s))?; }
+        if let Some(ref s) = self.railSoh { w.write_with_tag(42, |w| w.write_message(s))?; }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Clone)]
+pub struct RadioTelemetry {
+    pub tid: protos::no_std::TelemetryID,
+    pub message: protos::no_std::mod_RadioTelemetry::OneOfmessage,
+}
+
+impl<'a> MessageRead<'a> for RadioTelemetry {
+    fn from_reader(r: &mut BytesReader, bytes: &'a [u8]) -> Result<Self> {
+        let mut msg = Self::default();
+        while !r.is_eof() {
+            match r.next_tag(bytes) {
+                Ok(8) => msg.tid = r.read_enum(bytes)?,
+                Ok(18) => msg.message = protos::no_std::mod_RadioTelemetry::OneOfmessage::soh(r.read_message::<protos::no_std::RadioSOH>(bytes)?),
+                Ok(t) => { r.read_unknown(bytes, t)?; }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(msg)
+    }
+}
+
+impl MessageWrite for RadioTelemetry {
+    fn get_size(&self) -> usize {
+        0
+        + if self.tid == protos::no_std::TelemetryID::SOH { 0 } else { 1 + sizeof_varint(*(&self.tid) as u64) }
+        + match self.message {
+            protos::no_std::mod_RadioTelemetry::OneOfmessage::soh(ref m) => 1 + sizeof_len((m).get_size()),
+            protos::no_std::mod_RadioTelemetry::OneOfmessage::None => 0,
+    }    }
+
+    fn write_message<W: WriterBackend>(&self, w: &mut Writer<W>) -> Result<()> {
+        if self.tid != protos::no_std::TelemetryID::SOH { w.write_with_tag(8, |w| w.write_enum(*&self.tid as i32))?; }
+        match self.message {            protos::no_std::mod_RadioTelemetry::OneOfmessage::soh(ref m) => { w.write_with_tag(18, |w| w.write_message(m))? },
+            protos::no_std::mod_RadioTelemetry::OneOfmessage::None => {},
+    }        Ok(())
+    }
+}
+
+pub mod mod_RadioTelemetry {
+
+use super::*;
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum OneOfmessage {
+    soh(protos::no_std::RadioSOH),
+    None,
+}
+
+impl Default for OneOfmessage {
+    fn default() -> Self {
+        OneOfmessage::None
     }
 }
 
