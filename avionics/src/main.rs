@@ -17,7 +17,7 @@ use arrayvec::ArrayString;
 use core::alloc::Layout;
 use core::convert::Infallible;
 use cortex_m_semihosting as _;
-use hal::{adc, delay, gpio, prelude::*, serial, stm32::UART4, stm32::USART2};
+use hal::{adc, delay, gpio, prelude::*, serial, stm32::UART4, stm32::USART2, stm32::USART3};
 use heapless::{consts::*, spsc, Vec};
 use nb::block;
 use panic_semihosting as _;
@@ -46,10 +46,14 @@ const APP: () = {
         rx_cons: spsc::Consumer<'static, EpsResponse, U8>,
         tx_prod: spsc::Producer<'static, EpsCommand, U8>,
         tx_cons: spsc::Consumer<'static, EpsCommand, U8>,
+        radio_tx_prod: spsc::Producer<'static, RadioTelemetry, U8>,
+        radio_tx_cons: spsc::Consumer<'static, RadioTelemetry, U8>,
         debug_rx: serial::Rx<USART2>,
         debug_tx: serial::Tx<USART2>,
         conn_rx: serial::Rx<UART4>,
         conn_tx: serial::Tx<UART4>,
+        radio_rx: serial::Rx<USART3>,
+        radio_tx: serial::Tx<USART3>,
         led1: gpio::PF2<gpio::Output<gpio::OpenDrain>>,
         led2: gpio::PF3<gpio::Output<gpio::OpenDrain>>,
         led3: gpio::PF4<gpio::Output<gpio::OpenDrain>>,
@@ -62,14 +66,19 @@ const APP: () = {
         digital_pins: avi::DigitalPins,
         delay: delay::DelayCM,
         uart_parse_active: bool,
+        radio_uart_parse_active: bool,
         uart_parse_vec: &'static mut Vec<u8, U1024>,
+        radio_uart_parse_vec: &'static mut Vec<u8, U1024>,
     }
 
     #[init (schedule = [blinker, uart_buffer_clear, eps_query], spawn = [blinker])]
     fn init(cx: init::Context) -> init::LateResources {
         static mut RX_QUEUE: spsc::Queue<EpsResponse, U8> = spsc::Queue(heapless::i::Queue::new());
         static mut TX_QUEUE: spsc::Queue<EpsCommand, U8> = spsc::Queue(heapless::i::Queue::new());
+        static mut RADIO_TX_QUEUE: spsc::Queue<RadioTelemetry, U8> =
+            spsc::Queue(heapless::i::Queue::new());
         static mut UART_PARSE_VEC: Vec<u8, U1024> = Vec(heapless::i::Vec::new());
+        static mut RADIO_UART_PARSE_VEC: Vec<u8, U1024> = Vec(heapless::i::Vec::new());
 
         // Setup the Allocator
         // On the STM32L496 platform, there is 320K of RAM (shared by the stack)
@@ -109,6 +118,9 @@ const APP: () = {
         // Create the producer and consumer sides of the Queue
         let (tx_prod, tx_cons) = TX_QUEUE.split();
 
+        // Create the producer and consumer sides of the Queue
+        let (radio_tx_prod, radio_tx_cons) = RADIO_TX_QUEUE.split();
+
         // Schedule the blinking LED function
         cx.schedule
             .blinker(cx.start + BLINK_PERIOD.cycles())
@@ -124,20 +136,29 @@ const APP: () = {
             .uart_buffer_clear(cx.start + UART_PARSE_PERIOD.cycles())
             .unwrap();
 
+        // Schedule the RadioUart clear buffer function (only runs once at start)
+        cx.schedule
+            .uart_buffer_clear(cx.start + UART_PARSE_PERIOD.cycles())
+            .unwrap();
+
         init::LateResources {
             rx_prod,
             rx_cons,
             tx_prod,
             tx_cons,
+            radio_tx_prod,
+            radio_tx_cons,
             debug_rx: avi.debug_rx,
             debug_tx: avi.debug_tx,
             conn_rx: avi.conn_rx,
             conn_tx: avi.conn_tx,
-            led1: avi.led1,
-            led2: avi.led2,
-            led3: avi.led3,
-            led4: avi.led4,
-            led5: avi.led5,
+            radio_rx: avi.radio_rx,
+            radio_tx: avi.radio_tx,
+            led1: avi.led1, // blinker
+            led2: avi.led2, // power
+            led3: avi.led3, //
+            led4: avi.led4, // radio uart buffer
+            led5: avi.led5, // eps uart buffer
             watchdog_done: avi.watchdog_done,
             vref: avi.vref,
             adc: avi.adc,
@@ -145,7 +166,9 @@ const APP: () = {
             digital_pins: avi.digital_pins,
             delay: avi.delay,
             uart_parse_active: true, // true because we've scheduled the buffer clear function above
+            radio_uart_parse_active: true, // true because we've scheduled the buffer clear function above
             uart_parse_vec: UART_PARSE_VEC,
+            radio_uart_parse_vec: RADIO_UART_PARSE_VEC,
         }
     }
 
@@ -390,6 +413,45 @@ const APP: () = {
         //}
     }
 
+    // This task and radio_uart_buffer_clear share the same priority, so they can't pre-empt each other
+    #[task(binds = USART3, resources = [led4, radio_rx, radio_uart_parse_active, radio_uart_parse_vec], schedule = [radio_uart_buffer_clear], priority = 3)]
+    fn usart3(cx: usart3::Context) {
+        let rx = cx.resources.radio_rx;
+        //let queue = cx.resources.radio_rx_prod;
+        let uart_parse_active = cx.resources.radio_uart_parse_active;
+        let uart_parse_vec = cx.resources.radio_uart_parse_vec;
+        if let Ok(b) = rx.read() {
+            // push byte onto vector queue
+            uart_parse_vec.push(b).ok();
+        };
+
+        // TODO : do parsing?
+
+        // Schedule the buffer clear activity (if it isn't already running)
+        if !(*uart_parse_active) {
+            *uart_parse_active = true;
+            cx.resources.led4.set_low().ok();
+            cx.schedule
+                .radio_uart_buffer_clear(Instant::now() + UART_PARSE_PERIOD.cycles())
+                .unwrap();
+        }
+    }
+    // This task and usart3 share the same priority, so they can't pre-empt each other
+    #[task(resources = [led4, radio_uart_parse_active, radio_uart_parse_vec], priority = 3)]
+    fn radio_uart_buffer_clear(cx: radio_uart_buffer_clear::Context) {
+        let uart_parse_active = cx.resources.radio_uart_parse_active;
+        let uart_parse_vec = cx.resources.radio_uart_parse_vec;
+        let led4 = cx.resources.led4;
+
+        // turn off LED
+        led4.set_high().ok();
+        // Reset bool guard
+        *uart_parse_active = false;
+
+        // Clear buffer
+        uart_parse_vec.clear();
+    }
+
     #[task(resources = [led1], schedule = [blinker], priority = 1)]
     fn blinker(cx: blinker::Context) {
         static mut LED_IS_ON: bool = false;
@@ -413,9 +475,11 @@ const APP: () = {
     #[task(resources = [tx_prod], schedule = [eps_query], priority = 1)]
     fn eps_query(cx: eps_query::Context) {
         static mut CMD_TO_SEND: u8 = 0;
+        static mut RAIL_IDX: u8 = 0;
         let tx_prod = cx.resources.tx_prod;
 
         //cortex_m::asm::bkpt();
+        // Enqueu one of these basic requests
         let cmd = match *CMD_TO_SEND {
             1 => EpsCommand {
                 cid: CommandID::GetSolarVoltage,
@@ -435,6 +499,40 @@ const APP: () = {
             },
         };
         *CMD_TO_SEND = (*CMD_TO_SEND + 1) % 4;
+        tx_prod.enqueue(cmd).ok();
+
+        // Also enqueue a request to get a Power Rail State
+        let rail = match *RAIL_IDX {
+            0 => PowerRails::Rail1,
+            1 => PowerRails::Rail2,
+            2 => PowerRails::Rail3,
+            3 => PowerRails::Rail4,
+            4 => PowerRails::Rail5,
+            5 => PowerRails::Rail6,
+            6 => PowerRails::Rail7,
+            7 => PowerRails::Rail8,
+            8 => PowerRails::Rail9,
+            9 => PowerRails::Rail9,
+            10 => PowerRails::Rail11,
+            11 => PowerRails::Rail12,
+            12 => PowerRails::Rail13,
+            13 => PowerRails::Rail14,
+            14 => PowerRails::Rail15,
+            15 => PowerRails::Rail16,
+            16 => PowerRails::Hpwr1,
+            17 => PowerRails::Hpwr2,
+            18 => PowerRails::HpwrEn,
+            _ => PowerRails::Rail1,
+        };
+
+        let cmd = EpsCommand {
+            cid: CommandID::GetPowerRailState,
+            railState: Some(RailState {
+                railIdx: rail,
+                railState: false, // this value will be ignored
+            }),
+        };
+        *RAIL_IDX = (*RAIL_IDX + 1) % 19;
 
         tx_prod.enqueue(cmd).ok();
 
