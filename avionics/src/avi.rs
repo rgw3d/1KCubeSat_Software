@@ -4,6 +4,24 @@ use hal::{
     stm32::USART3,
 };
 
+#[derive(core::fmt::Debug)]
+pub enum RadioState {
+    RadioPowerFailure,
+    SendRadioOffCmd,
+    SendHpwrEnOffCmd,
+    RadioOff,
+    SendHpwrEnCmd,
+    WaitHpwrEnCmd1,
+    SendRadioOnCmd,
+    WaitRadioOnCmd1,
+    VerifyHpwrOnCmd,
+    WaitVerifyHpwrOnCmd1,
+    VerifyRadioOnCmd,
+    WaitVerifyRadioOnCmd1,
+    RadioOnNop,
+    RadioOnPopulateSOH,
+}
+
 pub struct AVI {
     //device: hal::stm32::Peripherals,
     //parts: GpioBankParts,

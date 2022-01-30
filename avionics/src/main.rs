@@ -31,6 +31,7 @@ use protos::no_std::{
 };
 use quick_protobuf::{deserialize_from_slice, serialize_into_slice, MessageWrite};
 mod avi;
+use avi::RadioState;
 
 #[global_allocator]
 static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
@@ -186,8 +187,14 @@ const APP: () = {
         let vref = cx.resources.vref;
         let delay = cx.resources.delay;
 
+        let mut radioState = RadioState::RadioOff;
+        let mut receivedHpwrEnAck = false;
+        let mut receivedHpwr2Ack = false;
+        let mut receivedHpwrEnGetAck = false;
+        let mut receivedHpwr2GetAck = false;
+
         // Radio telemetry stuct sent to the radio
-        let mut radioTelemetry = RadioTelemetry {
+        let mut telemetry = RadioTelemetry {
             tid: TelemetryID::SOH,
             message: mod_RadioTelemetry::OneOfmessage::soh(RadioSOH {
                 batteryVoltage: Some(BatteryVoltage {
@@ -230,7 +237,10 @@ const APP: () = {
                 }),
             }),
         };
-        if let OneOfmessage::soh(ref mut radioSoh) = radioTelemetry.message {
+
+        // open a reference to radioSoh for convenience
+        if let OneOfmessage::soh(ref mut telemetry) = telemetry.message {
+            // Main loop, loop forever
             loop {
                 //
                 // 1)
@@ -266,12 +276,18 @@ const APP: () = {
                 // Loop over any responses we may have recieved and update state
                 while let Some(eps_response) = rx_queue.dequeue() {
                     match eps_response.cid {
-                        CommandID::SetPowerRailState => { /* Do nothing, this response is just an ACK*/
-                        }
+                        CommandID::SetPowerRailState => match eps_response.resp {
+                            OneOfresp::railState(ref rs) => match rs.railIdx {
+                                PowerRails::HpwrEn => receivedHpwrEnAck = true,
+                                PowerRails::Hpwr2 => receivedHpwr2Ack = true,
+                                _ => { /*Do nothing*/ }
+                            },
+                            _ => { /*Do Nothing*/ }
+                        },
                         // Update our internal storage with the rail state
                         CommandID::GetPowerRailState => match eps_response.resp {
                             OneOfresp::railState(ref rs) => {
-                                if let Some(ref mut railSoh) = radioSoh.railSoh {
+                                if let Some(ref mut railSoh) = telemetry.railSoh {
                                     match rs.railIdx {
                                         // This ought to be an index into an array, but it works fine as is.
                                         PowerRails::Rail1 => railSoh.rail1 = rs.railState,
@@ -291,8 +307,14 @@ const APP: () = {
                                         PowerRails::Rail15 => railSoh.rail15 = rs.railState,
                                         PowerRails::Rail16 => railSoh.rail16 = rs.railState,
                                         PowerRails::Hpwr1 => railSoh.hpwr1 = rs.railState,
-                                        PowerRails::Hpwr2 => railSoh.hpwr2 = rs.railState,
-                                        PowerRails::HpwrEn => railSoh.hpwrEn = rs.railState,
+                                        PowerRails::Hpwr2 => {
+                                            railSoh.hpwr2 = rs.railState;
+                                            receivedHpwr2GetAck = true;
+                                        }
+                                        PowerRails::HpwrEn => {
+                                            railSoh.hpwrEn = rs.railState;
+                                            receivedHpwrEnGetAck = true;
+                                        }
                                     }
                                 }
                             }
@@ -301,7 +323,7 @@ const APP: () = {
                         },
                         CommandID::GetBatteryVoltage => {
                             if let OneOfresp::batteryVoltage(ref bv) = eps_response.resp {
-                                if let Some(ref mut batteryVoltage) = radioSoh.batteryVoltage {
+                                if let Some(ref mut batteryVoltage) = telemetry.batteryVoltage {
                                     batteryVoltage.battery1 = bv.battery1;
                                     batteryVoltage.battery2 = bv.battery2;
                                 }
@@ -309,7 +331,7 @@ const APP: () = {
                         }
                         CommandID::GetSolarVoltage => {
                             if let OneOfresp::solarVoltage(ref sv) = eps_response.resp {
-                                if let Some(ref mut solarVoltage) = radioSoh.solarVoltage {
+                                if let Some(ref mut solarVoltage) = telemetry.solarVoltage {
                                     solarVoltage.side1 = sv.side1;
                                     solarVoltage.side2 = sv.side2;
                                     solarVoltage.side3 = sv.side3;
@@ -321,13 +343,13 @@ const APP: () = {
                         }
                         CommandID::GetBatteryVoltageState => {
                             if let OneOfresp::batteryVoltageState(ref bvs) = eps_response.resp {
-                                radioSoh.batteryVoltageState = *bvs;
+                                telemetry.batteryVoltageState = *bvs;
                             }
                         }
                         CommandID::GetBatteryManagerState => {
                             if let OneOfresp::batteryManagerStates(ref bms) = eps_response.resp {
                                 if let Some(ref mut batteryManagerStates) =
-                                    radioSoh.batteryManagerStates
+                                    telemetry.batteryManagerStates
                                 {
                                     batteryManagerStates.battery1State = bms.battery1State;
                                     batteryManagerStates.battery2State = bms.battery2State;
@@ -351,11 +373,31 @@ const APP: () = {
 
                 //
                 // 5)
+                // Calculate next radio state
+                let next_radio_state = run_radio_state_machine(
+                    &radioState,
+                    telemetry,
+                    (
+                        receivedHpwrEnAck,
+                        receivedHpwr2Ack,
+                        receivedHpwrEnGetAck,
+                        receivedHpwr2GetAck,
+                    ),
+                );
+
+                // Reset these back to false
+                receivedHpwrEnAck = false;
+                receivedHpwr2Ack = false;
+                receivedHpwrEnGetAck = false;
+                receivedHpwr2GetAck = false;
+
+                //
+                // 6)
                 // Pet watchdog
                 pet_watchdog(cx.resources.watchdog_done);
 
                 //
-                // 6)
+                // 7)
                 // Sleep
                 delay.delay_ms(20u32);
             }
@@ -549,6 +591,82 @@ const APP: () = {
         fn SAI1();
     }
 };
+
+fn run_radio_state_machine(
+    current_radio_state: &RadioState,
+    soh: &RadioSOH,
+    recieved_ack: (bool, bool, bool, bool),
+) -> RadioState {
+    match current_radio_state {
+        RadioState::RadioOff => match soh.batteryVoltageState {
+            BatteryVoltageState::BothHigh => RadioState::SendHpwrEnCmd,
+            _ => RadioState::RadioOff,
+        },
+        RadioState::SendHpwrEnCmd => match recieved_ack {
+            (true, _, _, _) => RadioState::SendRadioOnCmd, // continue to power on the radio
+            (false, _, _, _) => RadioState::WaitHpwrEnCmd1, // wait a little longer for response
+        },
+        RadioState::WaitHpwrEnCmd1 => match recieved_ack {
+            (true, _, _, _) => RadioState::SendRadioOnCmd, // continue to power on the radio
+            (false, _, _, _) => RadioState::RadioPowerFailure, // Bad, something failed
+        },
+        RadioState::SendRadioOnCmd => match recieved_ack {
+            (_, true, _, _) => RadioState::VerifyHpwrOnCmd, // query explicitly to determine if radio power rail is on
+            (_, false, _, _) => RadioState::WaitRadioOnCmd1, // wait a little longer for response
+        },
+        RadioState::WaitRadioOnCmd1 => match recieved_ack {
+            (_, true, _, _) => RadioState::VerifyHpwrOnCmd, // query explicitly to determine if radio power rail is on
+            (_, false, _, _) => RadioState::RadioPowerFailure, // Bad, something failed
+        },
+        RadioState::VerifyHpwrOnCmd => match recieved_ack {
+            (_, _, true, _) => {
+                if soh.railSoh.as_ref().unwrap().hpwrEn {
+                    RadioState::VerifyRadioOnCmd // Now verify if the radio rail is on
+                } else {
+                    RadioState::WaitVerifyHpwrOnCmd1 // Wait a little longer
+                }
+            }
+            (_, _, false, _) => RadioState::WaitVerifyHpwrOnCmd1, // wait a little longer for response
+        },
+        RadioState::WaitVerifyHpwrOnCmd1 => match recieved_ack {
+            (_, _, true, _) => {
+                if soh.railSoh.as_ref().unwrap().hpwrEn {
+                    RadioState::VerifyRadioOnCmd // query explicitly to determine if radio power rail is on
+                } else {
+                    RadioState::RadioPowerFailure // Bad, something failed
+                }
+            }
+            (_, _, false, _) => RadioState::RadioPowerFailure, // Bad, something failed
+        },
+        RadioState::VerifyRadioOnCmd => match recieved_ack {
+            (_, _, _, true) => {
+                if soh.railSoh.as_ref().unwrap().hpwr2 {
+                    RadioState::RadioOnNop // Radio is on
+                } else {
+                    RadioState::WaitVerifyRadioOnCmd1 // wait a little longer
+                }
+            }
+            (_, _, _, false) => RadioState::WaitVerifyRadioOnCmd1, // wait a little longer for response
+        },
+        RadioState::WaitVerifyRadioOnCmd1 => match recieved_ack {
+            (_, _, _, true) => {
+                if soh.railSoh.as_ref().unwrap().hpwr2 {
+                    RadioState::RadioOnNop // Radio is on
+                } else {
+                    RadioState::RadioPowerFailure // Bad, something failed
+                }
+            }
+            (_, _, _, false) => RadioState::RadioPowerFailure, // Bad, something failed
+        },
+        RadioState::RadioOnNop => match soh.batteryVoltageState {
+            BatteryVoltageState::BothHigh => RadioState::RadioOnPopulateSOH, // Populate SOH if battery is still good
+            _ => RadioState::SendRadioOffCmd, // Turn off if battery is low
+        },
+        RadioState::RadioOnPopulateSOH => RadioState::RadioOnNop, // loop back to RadioOnNop
+
+        _ => RadioState::RadioOff, // TODO
+    }
+}
 
 //fn pet_watchdog(watchdog_done: &mut WatchdogPinType) {
 //fn pet_watchdog<'a>(watchdog_done: &'a mut hal::prelude::OutputPin<Error = Infallible>) {
