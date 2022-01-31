@@ -4,11 +4,13 @@ use hal::{
     stm32::USART3,
 };
 
-#[derive(core::fmt::Debug)]
+#[derive(core::fmt::Debug, core::marker::Copy, core::clone::Clone)]
 pub enum RadioState {
     RadioPowerFailure,
     SendRadioOffCmd,
+    WaitRadioOffCmd,
     SendHpwrEnOffCmd,
+    WaitHpwrEnOffCmd,
     RadioOff,
     SendHpwrEnCmd,
     WaitHpwrEnCmd1,

@@ -261,15 +261,6 @@ const APP: () = {
 
                 //
                 // 3)
-                // Send any commands to the EPS
-                // Only send one at a time
-                if let Some(eps_command) = tx_queue.dequeue() {
-                    let mut tmp_buf = [0u8; 1024];
-                    serialize_into_slice(&eps_command, &mut tmp_buf).ok();
-                    for elem in tmp_buf.iter().take(eps_command.get_size() + 1) {
-                        block!(conn_tx.write(*elem)).unwrap();
-                    }
-                }
 
                 //
                 // 4)
@@ -385,6 +376,8 @@ const APP: () = {
                     ),
                 );
 
+                let eps_cmd_rsm = apply_radio_state_machine(&mut radioState, &next_radio_state);
+
                 // Reset these back to false
                 receivedHpwrEnAck = false;
                 receivedHpwr2Ack = false;
@@ -393,11 +386,21 @@ const APP: () = {
 
                 //
                 // 6)
+                // Send any commands to the EPS
+                // Only send one at a time
+                if let Some(eps_command) = eps_cmd_rsm {
+                    send_eps_command(eps_command, conn_tx);
+                } else if let Some(eps_command) = tx_queue.dequeue() {
+                    send_eps_command(eps_command, conn_tx);
+                }
+
+                //
+                // 7)
                 // Pet watchdog
                 pet_watchdog(cx.resources.watchdog_done);
 
                 //
-                // 7)
+                // 8)
                 // Sleep
                 delay.delay_ms(20u32);
             }
@@ -592,16 +595,27 @@ const APP: () = {
     }
 };
 
+fn send_eps_command(eps_command: EpsCommand, conn_tx: &mut impl _embedded_hal_serial_Write<u8>) {
+    let mut tmp_buf = [0u8; 1024];
+    serialize_into_slice(&eps_command, &mut tmp_buf).ok();
+    for elem in tmp_buf.iter().take(eps_command.get_size() + 1) {
+        block!(conn_tx.write(*elem)).ok();
+    }
+}
+
 fn run_radio_state_machine(
     current_radio_state: &RadioState,
     soh: &RadioSOH,
     recieved_ack: (bool, bool, bool, bool),
 ) -> RadioState {
     match current_radio_state {
+        // Radio off, determine if should go through power on
         RadioState::RadioOff => match soh.batteryVoltageState {
             BatteryVoltageState::BothHigh => RadioState::SendHpwrEnCmd,
             _ => RadioState::RadioOff,
         },
+
+        // Begin Radio Power on, Enable Hpwr
         RadioState::SendHpwrEnCmd => match recieved_ack {
             (true, _, _, _) => RadioState::SendRadioOnCmd, // continue to power on the radio
             (false, _, _, _) => RadioState::WaitHpwrEnCmd1, // wait a little longer for response
@@ -610,6 +624,8 @@ fn run_radio_state_machine(
             (true, _, _, _) => RadioState::SendRadioOnCmd, // continue to power on the radio
             (false, _, _, _) => RadioState::RadioPowerFailure, // Bad, something failed
         },
+
+        // Turn on radio specifically (Hpwr2)
         RadioState::SendRadioOnCmd => match recieved_ack {
             (_, true, _, _) => RadioState::VerifyHpwrOnCmd, // query explicitly to determine if radio power rail is on
             (_, false, _, _) => RadioState::WaitRadioOnCmd1, // wait a little longer for response
@@ -618,6 +634,8 @@ fn run_radio_state_machine(
             (_, true, _, _) => RadioState::VerifyHpwrOnCmd, // query explicitly to determine if radio power rail is on
             (_, false, _, _) => RadioState::RadioPowerFailure, // Bad, something failed
         },
+
+        // Verify HpwrEn is on
         RadioState::VerifyHpwrOnCmd => match recieved_ack {
             (_, _, true, _) => {
                 if soh.railSoh.as_ref().unwrap().hpwrEn {
@@ -638,6 +656,8 @@ fn run_radio_state_machine(
             }
             (_, _, false, _) => RadioState::RadioPowerFailure, // Bad, something failed
         },
+
+        // Verify Hpwr2 is on
         RadioState::VerifyRadioOnCmd => match recieved_ack {
             (_, _, _, true) => {
                 if soh.railSoh.as_ref().unwrap().hpwr2 {
@@ -658,13 +678,109 @@ fn run_radio_state_machine(
             }
             (_, _, _, false) => RadioState::RadioPowerFailure, // Bad, something failed
         },
+
+        // Radio On Steady State
         RadioState::RadioOnNop => match soh.batteryVoltageState {
             BatteryVoltageState::BothHigh => RadioState::RadioOnPopulateSOH, // Populate SOH if battery is still good
             _ => RadioState::SendRadioOffCmd, // Turn off if battery is low
         },
         RadioState::RadioOnPopulateSOH => RadioState::RadioOnNop, // loop back to RadioOnNop
 
-        _ => RadioState::RadioOff, // TODO
+        // Transition to Radio Off. Turn of Hpwr2
+        RadioState::SendRadioOffCmd => match recieved_ack {
+            (_, true, _, _) => RadioState::SendHpwrEnOffCmd, // transition to sending HpwrEnOff
+            (_, false, _, _) => RadioState::WaitRadioOffCmd, // wait a little longer for response
+        },
+        RadioState::WaitRadioOffCmd => match recieved_ack {
+            (_, true, _, _) => RadioState::SendHpwrEnOffCmd, // transition to sending HpwrEnOff
+            (_, false, _, _) => RadioState::RadioPowerFailure, // Bad, something failed
+        },
+        // Turn off HpwrEn
+        RadioState::SendHpwrEnOffCmd => match recieved_ack {
+            (true, _, _, _) => RadioState::RadioOff, // Radio is off
+            (false, _, _, _) => RadioState::WaitHpwrEnOffCmd, // wait a little longer for response
+        },
+        RadioState::WaitHpwrEnOffCmd => match recieved_ack {
+            (true, _, _, _) => RadioState::RadioOff, // Radio is off
+            (false, _, _, _) => RadioState::RadioPowerFailure, // Bad, something failed
+        },
+
+        // TODO update this
+        RadioState::RadioPowerFailure => RadioState::RadioPowerFailure,
+    }
+}
+
+fn apply_radio_state_machine(
+    current_radio_state: &mut RadioState,
+    next_radio_state: &RadioState,
+) -> Option<EpsCommand> {
+    // Update current state with next state
+    *current_radio_state = *next_radio_state;
+
+    match next_radio_state {
+        // Send Radio Off cmd
+        RadioState::SendRadioOffCmd => Some(EpsCommand {
+            cid: CommandID::SetPowerRailState,
+            railState: Some(RailState {
+                railIdx: PowerRails::Hpwr2,
+                railState: false,
+            }),
+        }),
+        RadioState::WaitRadioOffCmd => None,
+
+        // Send HpwrEn off
+        RadioState::SendHpwrEnOffCmd => Some(EpsCommand {
+            cid: CommandID::SetPowerRailState,
+            railState: Some(RailState {
+                railIdx: PowerRails::HpwrEn,
+                railState: false,
+            }),
+        }),
+        RadioState::WaitHpwrEnOffCmd => None,
+        RadioState::RadioOff => None,
+
+        // Send HpwrEn On cmd
+        RadioState::SendHpwrEnCmd => Some(EpsCommand {
+            cid: CommandID::SetPowerRailState,
+            railState: Some(RailState {
+                railIdx: PowerRails::HpwrEn,
+                railState: true,
+            }),
+        }),
+        RadioState::WaitHpwrEnCmd1 => None,
+
+        // Send Radio On cmd
+        RadioState::SendRadioOnCmd => Some(EpsCommand {
+            cid: CommandID::SetPowerRailState,
+            railState: Some(RailState {
+                railIdx: PowerRails::Hpwr2,
+                railState: true,
+            }),
+        }),
+        RadioState::WaitRadioOnCmd1 => None,
+
+        // Send Get HpwrEn state
+        RadioState::VerifyHpwrOnCmd => Some(EpsCommand {
+            cid: CommandID::GetPowerRailState,
+            railState: Some(RailState {
+                railIdx: PowerRails::HpwrEn,
+                railState: true, // ignored
+            }),
+        }),
+        RadioState::WaitVerifyHpwrOnCmd1 => None,
+
+        // Send Get Hpwr2 state
+        RadioState::VerifyRadioOnCmd => Some(EpsCommand {
+            cid: CommandID::GetPowerRailState,
+            railState: Some(RailState {
+                railIdx: PowerRails::Hpwr2,
+                railState: true, // ignored
+            }),
+        }),
+        RadioState::WaitVerifyRadioOnCmd1 => None,
+        RadioState::RadioOnNop => None,
+        RadioState::RadioOnPopulateSOH => None,
+        RadioState::RadioPowerFailure => None,
     }
 }
 
