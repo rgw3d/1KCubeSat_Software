@@ -37,7 +37,7 @@ use avi::RadioState;
 static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
 
 const BLINK_PERIOD: u32 = 8_000_000;
-const EPS_QUERY_PERIOD: u32 = 3_000_000;
+const EPS_QUERY_PERIOD: u32 = 4_000_000;
 const UART_PARSE_PERIOD: u32 = 1_000_000;
 
 #[rtic::app(device = hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
@@ -72,7 +72,7 @@ const APP: () = {
         radio_uart_parse_vec: &'static mut Vec<u8, U1024>,
     }
 
-    #[init (schedule = [blinker, uart_buffer_clear, eps_query], spawn = [blinker])]
+    #[init (schedule = [blinker, uart_buffer_clear, radio_uart_buffer_clear, eps_query], spawn = [blinker])]
     fn init(cx: init::Context) -> init::LateResources {
         static mut RX_QUEUE: spsc::Queue<EpsResponse, U8> = spsc::Queue(heapless::i::Queue::new());
         static mut TX_QUEUE: spsc::Queue<EpsCommand, U8> = spsc::Queue(heapless::i::Queue::new());
@@ -139,7 +139,7 @@ const APP: () = {
 
         // Schedule the RadioUart clear buffer function (only runs once at start)
         cx.schedule
-            .uart_buffer_clear(cx.start + UART_PARSE_PERIOD.cycles())
+            .radio_uart_buffer_clear(cx.start + UART_PARSE_PERIOD.cycles())
             .unwrap();
 
         init::LateResources {
@@ -352,7 +352,7 @@ const APP: () = {
                     let mut test_str_buffer = ArrayString::<512>::new();
                     core::fmt::write(
                         &mut test_str_buffer,
-                        format_args!("parsed message from EPS: {:?}\n\r", eps_response),
+                        format_args!("RX {:?}\n\r", eps_response),
                     )
                     .unwrap();
 
@@ -376,6 +376,21 @@ const APP: () = {
                     ),
                 );
 
+                //
+                // Log radio comms state
+                //
+                let mut test_str_buffer = ArrayString::<512>::new();
+                core::fmt::write(
+                    &mut test_str_buffer,
+                    format_args!("({:?} <-- {:?}\n\r", next_radio_state, radioState),
+                )
+                .unwrap();
+
+                // Write string buffer out to UART
+                for c in test_str_buffer.as_str().bytes() {
+                    block!(debug_tx.write(c)).unwrap();
+                }
+
                 let eps_cmd_rsm = apply_radio_state_machine(&mut radioState, &next_radio_state);
 
                 // Reset these back to false
@@ -385,24 +400,49 @@ const APP: () = {
                 receivedHpwr2GetAck = false;
 
                 //
+                // Log command sent to EPS
+                //
+                //let mut test_str_buffer = ArrayString::<512>::new();
+
+                //
                 // 6)
                 // Send any commands to the EPS
                 // Only send one at a time
                 if let Some(eps_command) = eps_cmd_rsm {
+                    //core::fmt::write(
+                    //    &mut test_str_buffer,
+                    //    format_args!("To EPS {:?} \n\r", eps_command),
+                    //)
+                    //.unwrap();
                     send_eps_command(eps_command, conn_tx);
                 } else if let Some(eps_command) = tx_queue.dequeue() {
+                    //core::fmt::write(
+                    //    &mut test_str_buffer,
+                    //    format_args!("To EPS {:?} \n\r", eps_command),
+                    //)
+                    //.unwrap();
                     send_eps_command(eps_command, conn_tx);
                 }
 
+                // Write string buffer out to UART
+                for c in test_str_buffer.as_str().bytes() {
+                    block!(debug_tx.write(c)).unwrap();
+                }
+
                 //
-                // 7)
+                // 7) Do Radio comms
+                //    (If in correct state for radio messages, that is)
+                talk_to_radio(&radioState);
+
+                //
+                // 8)
                 // Pet watchdog
                 pet_watchdog(cx.resources.watchdog_done);
 
                 //
-                // 8)
+                // 9)
                 // Sleep
-                delay.delay_ms(20u32);
+                delay.delay_ms(40u32);
             }
         }
 
@@ -706,6 +746,7 @@ fn run_radio_state_machine(
         },
 
         // TODO update this
+        // What do in this state
         RadioState::RadioPowerFailure => RadioState::RadioPowerFailure,
     }
 }
@@ -782,6 +823,19 @@ fn apply_radio_state_machine(
         RadioState::RadioOnPopulateSOH => None,
         RadioState::RadioPowerFailure => None,
     }
+}
+
+fn talk_to_radio(current_radio_state: &RadioState) {
+    match current_radio_state {
+        RadioState::RadioOnPopulateSOH => {
+            // Do something...
+            //Send a message to the radio with the SOH information?? I think that is reasonable
+        }
+        _ => { /* Do Nothing */ }
+    }
+    //if *current_radio_state == RadioState::RadioOnPopulateSOH {
+    //    // Do Something in here
+    //}
 }
 
 //fn pet_watchdog(watchdog_done: &mut WatchdogPinType) {
