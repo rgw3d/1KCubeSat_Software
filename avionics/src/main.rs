@@ -15,11 +15,12 @@ extern crate stm32l4xx_hal as hal;
 use alloc_cortex_m::CortexMHeap;
 use arrayvec::ArrayString;
 use core::alloc::Layout;
-use core::convert::Infallible;
 use cortex_m_semihosting as _;
 use hal::{adc, delay, gpio, prelude::*, serial, stm32::UART4, stm32::USART2, stm32::USART3};
-use heapless::{consts::*, spsc, Vec};
+use heapless::{spsc, Vec};
 use nb::block;
+use packed_struct::types::bits::ByteArray;
+use packed_struct::PackedStruct;
 use panic_semihosting as _;
 use rtic::cyccnt::{Instant, U32Ext as _};
 pub mod protos;
@@ -31,6 +32,8 @@ use protos::no_std::{
 };
 use quick_protobuf::{deserialize_from_slice, serialize_into_slice, MessageWrite};
 mod avi;
+use avi::RadioAction;
+use avi::RadioMessageHeader;
 use avi::RadioState;
 
 #[global_allocator]
@@ -39,16 +42,17 @@ static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
 const BLINK_PERIOD: u32 = 8_000_000;
 const EPS_QUERY_PERIOD: u32 = 4_000_000;
 const UART_PARSE_PERIOD: u32 = 1_000_000;
+const SEND_TELEM_TO_RADIO: u32 = 20;
 
 #[rtic::app(device = hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
-        rx_prod: spsc::Producer<'static, EpsResponse, U8>,
-        rx_cons: spsc::Consumer<'static, EpsResponse, U8>,
-        tx_prod: spsc::Producer<'static, EpsCommand, U8>,
-        tx_cons: spsc::Consumer<'static, EpsCommand, U8>,
-        radio_tx_prod: spsc::Producer<'static, RadioTelemetry, U8>,
-        radio_tx_cons: spsc::Consumer<'static, RadioTelemetry, U8>,
+        rx_prod: spsc::Producer<'static, EpsResponse, 8>,
+        rx_cons: spsc::Consumer<'static, EpsResponse, 8>,
+        tx_prod: spsc::Producer<'static, EpsCommand, 8>,
+        tx_cons: spsc::Consumer<'static, EpsCommand, 8>,
+        radio_rx_prod: spsc::Producer<'static, RadioMessageHeader, 8>,
+        radio_rx_cons: spsc::Consumer<'static, RadioMessageHeader, 8>,
         debug_rx: serial::Rx<USART2>,
         debug_tx: serial::Tx<USART2>,
         conn_rx: serial::Rx<UART4>,
@@ -68,18 +72,17 @@ const APP: () = {
         delay: delay::DelayCM,
         uart_parse_active: bool,
         radio_uart_parse_active: bool,
-        uart_parse_vec: &'static mut Vec<u8, U1024>,
-        radio_uart_parse_vec: &'static mut Vec<u8, U1024>,
+        uart_parse_vec: &'static mut Vec<u8, 1024>,
+        radio_uart_parse_vec: &'static mut Vec<u8, 1024>,
     }
 
     #[init (schedule = [blinker, uart_buffer_clear, radio_uart_buffer_clear, eps_query], spawn = [blinker])]
     fn init(cx: init::Context) -> init::LateResources {
-        static mut RX_QUEUE: spsc::Queue<EpsResponse, U8> = spsc::Queue(heapless::i::Queue::new());
-        static mut TX_QUEUE: spsc::Queue<EpsCommand, U8> = spsc::Queue(heapless::i::Queue::new());
-        static mut RADIO_TX_QUEUE: spsc::Queue<RadioTelemetry, U8> =
-            spsc::Queue(heapless::i::Queue::new());
-        static mut UART_PARSE_VEC: Vec<u8, U1024> = Vec(heapless::i::Vec::new());
-        static mut RADIO_UART_PARSE_VEC: Vec<u8, U1024> = Vec(heapless::i::Vec::new());
+        static mut RX_QUEUE: spsc::Queue<EpsResponse, 8> = spsc::Queue::new(); //spsc::Queue(heapless::i::Queue::new());
+        static mut TX_QUEUE: spsc::Queue<EpsCommand, 8> = spsc::Queue::new(); //spsc::Queue(heapless::i::Queue::new());
+        static mut RADIO_RX_QUEUE: spsc::Queue<RadioMessageHeader, 8> = spsc::Queue::new();
+        static mut UART_PARSE_VEC: Vec<u8, 1024> = Vec::new();
+        static mut RADIO_UART_PARSE_VEC: Vec<u8, 1024> = Vec::new();
 
         // Setup the Allocator
         // On the STM32L496 platform, there is 320K of RAM (shared by the stack)
@@ -120,7 +123,7 @@ const APP: () = {
         let (tx_prod, tx_cons) = TX_QUEUE.split();
 
         // Create the producer and consumer sides of the Queue
-        let (radio_tx_prod, radio_tx_cons) = RADIO_TX_QUEUE.split();
+        let (radio_rx_prod, radio_rx_cons) = RADIO_RX_QUEUE.split();
 
         // Schedule the blinking LED function
         cx.schedule
@@ -147,8 +150,8 @@ const APP: () = {
             rx_cons,
             tx_prod,
             tx_cons,
-            radio_tx_prod,
-            radio_tx_cons,
+            radio_rx_prod,
+            radio_rx_cons,
             debug_rx: avi.debug_rx,
             debug_tx: avi.debug_tx,
             conn_rx: avi.conn_rx,
@@ -157,7 +160,7 @@ const APP: () = {
             radio_tx: avi.radio_tx,
             led1: avi.led1, // blinker
             led2: avi.led2, // power
-            led3: avi.led3, //
+            led3: avi.led3, // sending to radio
             led4: avi.led4, // radio uart buffer
             led5: avi.led5, // eps uart buffer
             watchdog_done: avi.watchdog_done,
@@ -173,19 +176,24 @@ const APP: () = {
         }
     }
 
-    #[idle(resources = [adc, vref, analog_pins, conn_tx, debug_tx, rx_cons, tx_cons, watchdog_done, digital_pins, led3, delay])]
+    #[idle(resources = [adc, vref, analog_pins, conn_tx, debug_tx, radio_tx, rx_cons, tx_cons, radio_rx_cons, watchdog_done, digital_pins, led3, delay])]
     fn idle(cx: idle::Context) -> ! {
         // Pull variables from the Context struct for conveinece.
         let rx_queue = cx.resources.rx_cons;
         let tx_queue = cx.resources.tx_cons;
+        let radio_rx_queue = cx.resources.radio_rx_cons;
         let debug_tx = cx.resources.debug_tx;
         let conn_tx = cx.resources.conn_tx;
+        let radio_tx = cx.resources.radio_tx;
         let adc = cx.resources.adc;
         let analog_pins = cx.resources.analog_pins;
         let _digital_pins = cx.resources.digital_pins;
         let led3 = cx.resources.led3;
-        let vref = cx.resources.vref;
+        let _vref = cx.resources.vref;
         let delay = cx.resources.delay;
+
+        let mut radio_nop_counts: u32 = 32;
+        let mut radio_message_sequence_number: u16 = 0;
 
         let mut radioState = RadioState::RadioOff;
         let mut received3V3RailAck = false;
@@ -196,7 +204,7 @@ const APP: () = {
         let mut receivedHpwr2GetAck = false;
 
         // Radio telemetry stuct sent to the radio
-        let mut telemetry = RadioTelemetry {
+        let mut radio_telemetry = RadioTelemetry {
             tid: TelemetryID::SOH,
             message: mod_RadioTelemetry::OneOfmessage::soh(RadioSOH {
                 batteryVoltage: Some(BatteryVoltage {
@@ -240,44 +248,59 @@ const APP: () = {
             }),
         };
 
-        // open a reference to radioSoh for convenience
-        if let OneOfmessage::soh(ref mut telemetry) = telemetry.message {
-            // Main loop, loop forever
-            loop {
+        // Main loop, loop forever
+        loop {
+            // open a reference to radioSoh for convenience
+            if let OneOfmessage::soh(ref mut telemetry) = radio_telemetry.message {
                 //
                 // 1)
                 // Measure state & save it somewhere
                 //adc.calibrate(vref);
                 adc.set_sample_time(adc::SampleTime::Cycles47_5);
-                let th1 = adc.read(&mut analog_pins.th1).unwrap();
-                let th2 = adc.read(&mut analog_pins.th2).unwrap();
-                let th3 = adc.read(&mut analog_pins.th3).unwrap();
-                let th4 = adc.read(&mut analog_pins.th4).unwrap();
-                let th5 = adc.read(&mut analog_pins.th5).unwrap();
-                let th6 = adc.read(&mut analog_pins.th6).unwrap();
-                let th7 = adc.read(&mut analog_pins.th6).unwrap();
-                let th8 = adc.read(&mut analog_pins.th6).unwrap();
+                let _th1 = adc.read(&mut analog_pins.th1).unwrap();
+                let _th2 = adc.read(&mut analog_pins.th2).unwrap();
+                let _th3 = adc.read(&mut analog_pins.th3).unwrap();
+                let _th4 = adc.read(&mut analog_pins.th4).unwrap();
+                let _th5 = adc.read(&mut analog_pins.th5).unwrap();
+                let _th6 = adc.read(&mut analog_pins.th6).unwrap();
+                let _th7 = adc.read(&mut analog_pins.th6).unwrap();
+                let _th8 = adc.read(&mut analog_pins.th6).unwrap();
 
                 //
                 // 2)
 
                 //
                 // 3)
+                // Loop over any responses we may have recieved from the radio
+                while let Some(radio_response) = radio_rx_queue.dequeue() {
+                    // Simply log these out to console
+                    let mut test_str_buffer = ArrayString::<256>::new();
+                    core::fmt::write(
+                        &mut test_str_buffer,
+                        format_args!("From Radio: {:?}\n\r", radio_response),
+                    )
+                    .unwrap();
+                    // Write string buffer out to UART
+                    for c in test_str_buffer.as_str().bytes() {
+                        block!(debug_tx.write(c)).unwrap();
+                    }
+                }
 
                 //
                 // 4)
-                // Loop over any responses we may have recieved and update state
+                // Loop over any responses we may have recieved from the EPS and update state
                 while let Some(eps_response) = rx_queue.dequeue() {
                     match eps_response.cid {
-                        CommandID::SetPowerRailState => match eps_response.resp {
-                            OneOfresp::railState(ref rs) => match rs.railIdx {
-                                PowerRails::HpwrEn => receivedHpwrEnAck = true,
-                                PowerRails::Hpwr2 => receivedHpwr2Ack = true,
-                                PowerRails::Rail10 => received3V3RailAck = true,
-                                _ => { /*Do nothing*/ }
-                            },
-                            _ => { /*Do Nothing*/ }
-                        },
+                        CommandID::SetPowerRailState => {
+                            if let OneOfresp::railState(ref rs) = eps_response.resp {
+                                match rs.railIdx {
+                                    PowerRails::HpwrEn => receivedHpwrEnAck = true,
+                                    PowerRails::Hpwr2 => receivedHpwr2Ack = true,
+                                    PowerRails::Rail10 => received3V3RailAck = true,
+                                    _ => { /*Do nothing*/ }
+                                }
+                            }
+                        }
                         // Update our internal storage with the rail state
                         CommandID::GetPowerRailState => match eps_response.resp {
                             OneOfresp::railState(ref rs) => {
@@ -367,11 +390,14 @@ const APP: () = {
                         block!(debug_tx.write(c)).unwrap();
                     }
                 }
+            }
 
-                //
-                // 5)
-                // Calculate next radio state
-                let next_radio_state = run_radio_state_machine(
+            //
+            // 5)
+            // Calculate next radio state
+            let mut next_radio_state: RadioState = RadioState::RadioPowerFailure;
+            if let OneOfmessage::soh(ref telemetry) = radio_telemetry.message {
+                next_radio_state = run_radio_state_machine(
                     &radioState,
                     telemetry,
                     (
@@ -383,82 +409,92 @@ const APP: () = {
                         receivedHpwr2GetAck,
                     ),
                 );
-
-                //
-                // Log radio comms state
-                //
-                let mut test_str_buffer = ArrayString::<512>::new();
-                core::fmt::write(
-                    &mut test_str_buffer,
-                    format_args!("({:?} <-- {:?}\n\r", next_radio_state, radioState),
-                )
-                .unwrap();
-
-                // Write string buffer out to UART
-                for c in test_str_buffer.as_str().bytes() {
-                    block!(debug_tx.write(c)).unwrap();
-                }
-
-                let eps_cmd_rsm = apply_radio_state_machine(&mut radioState, &next_radio_state);
-
-                // Reset these back to false
-                received3V3RailAck = false;
-                received3V3RailGetAck = false;
-                receivedHpwrEnAck = false;
-                receivedHpwr2Ack = false;
-                receivedHpwrEnGetAck = false;
-                receivedHpwr2GetAck = false;
-
-                //
-                // Log command sent to EPS
-                //
-                //let mut test_str_buffer = ArrayString::<512>::new();
-
-                //
-                // 6)
-                // Send any commands to the EPS
-                // Only send one at a time
-                if let Some(eps_command) = eps_cmd_rsm {
-                    //core::fmt::write(
-                    //    &mut test_str_buffer,
-                    //    format_args!("To EPS {:?} \n\r", eps_command),
-                    //)
-                    //.unwrap();
-                    send_eps_command(eps_command, conn_tx);
-                } else if let Some(eps_command) = tx_queue.dequeue() {
-                    //core::fmt::write(
-                    //    &mut test_str_buffer,
-                    //    format_args!("To EPS {:?} \n\r", eps_command),
-                    //)
-                    //.unwrap();
-                    send_eps_command(eps_command, conn_tx);
-                }
-
-                // Write string buffer out to UART
-                for c in test_str_buffer.as_str().bytes() {
-                    block!(debug_tx.write(c)).unwrap();
-                }
-
-                //
-                // 7) Do Radio comms
-                //    (If in correct state for radio messages, that is)
-                talk_to_radio(&radioState);
-
-                //
-                // 8)
-                // Pet watchdog
-                pet_watchdog(cx.resources.watchdog_done);
-
-                //
-                // 9)
-                // Sleep
-                delay.delay_ms(40u32);
             }
-        }
 
-        // Should not return
-        loop {
-            cortex_m::asm::bkpt();
+            //
+            // Log radio comms state
+            //
+            let mut test_str_buffer = ArrayString::<512>::new();
+            core::fmt::write(
+                &mut test_str_buffer,
+                format_args!("({:?} <-- {:?}\n\r", next_radio_state, radioState),
+            )
+            .unwrap();
+
+            // Write string buffer out to UART
+            for c in test_str_buffer.as_str().bytes() {
+                block!(debug_tx.write(c)).unwrap();
+            }
+
+            let eps_cmd_rsm = apply_radio_state_machine(&mut radioState, &next_radio_state);
+
+            // Reset these back to false
+            received3V3RailAck = false;
+            received3V3RailGetAck = false;
+            receivedHpwrEnAck = false;
+            receivedHpwr2Ack = false;
+            receivedHpwrEnGetAck = false;
+            receivedHpwr2GetAck = false;
+
+            //
+            // Log command sent to EPS
+            //
+            //let mut test_str_buffer = ArrayString::<512>::new();
+
+            //
+            // 6)
+            // Send any commands to the EPS
+            // Only send one at a time
+            if let Some(eps_command) = eps_cmd_rsm {
+                //core::fmt::write(
+                //    &mut test_str_buffer,
+                //    format_args!("To EPS {:?} \n\r", eps_command),
+                //)
+                //.unwrap();
+                send_eps_command(eps_command, conn_tx);
+            } else if let Some(eps_command) = tx_queue.dequeue() {
+                //core::fmt::write(
+                //    &mut test_str_buffer,
+                //    format_args!("To EPS {:?} \n\r", eps_command),
+                //)
+                //.unwrap();
+                send_eps_command(eps_command, conn_tx);
+            }
+
+            // Write string buffer out to UART
+            for c in test_str_buffer.as_str().bytes() {
+                block!(debug_tx.write(c)).unwrap();
+            }
+
+            //
+            // 7) Figure out what to do with the radio (If the radio is in a good state )
+            //    (If in correct state for radio messages, that is)
+            match determine_radio_action(&radioState, &mut radio_nop_counts) {
+                Some(RadioAction::PopulateTelem) => {
+                    let header = RadioMessageHeader {
+                        hwid: 0xFFFF, // Indicates local message
+                        sequence_number: radio_message_sequence_number,
+                        destination: 1,   // Don't forward this message
+                        command_id: 0x1C, // Set external data 1
+                    };
+                    radio_message_sequence_number += 1;
+                    led3.set_low().ok();
+                    send_radio_message(&header, &radio_telemetry, radio_tx);
+                    led3.set_high().ok();
+                    // Do thing
+                }
+                None => { /* Do nothing */ }
+            }
+
+            //
+            // 8)
+            // Pet watchdog
+            pet_watchdog(cx.resources.watchdog_done);
+
+            //
+            // 9)
+            // Sleep
+            delay.delay_ms(40u32);
         }
     }
 
@@ -509,10 +545,10 @@ const APP: () = {
     }
 
     // This task and radio_uart_buffer_clear share the same priority, so they can't pre-empt each other
-    #[task(binds = USART3, resources = [led4, radio_rx, radio_uart_parse_active, radio_uart_parse_vec], schedule = [radio_uart_buffer_clear], priority = 3)]
+    #[task(binds = USART3, resources = [led4, radio_rx, radio_rx_prod, radio_uart_parse_active, radio_uart_parse_vec], schedule = [radio_uart_buffer_clear], priority = 3)]
     fn usart3(cx: usart3::Context) {
         let rx = cx.resources.radio_rx;
-        //let queue = cx.resources.radio_rx_prod;
+        let queue = cx.resources.radio_rx_prod;
         let uart_parse_active = cx.resources.radio_uart_parse_active;
         let uart_parse_vec = cx.resources.radio_uart_parse_vec;
         if let Ok(b) = rx.read() {
@@ -520,7 +556,20 @@ const APP: () = {
             uart_parse_vec.push(b).ok();
         };
 
-        // TODO : do parsing?
+        // If we have 6 bytes (the size of the header, parse)
+        if uart_parse_vec.len() == 6 {
+            // there has to be a better way
+            let array: [u8; 6] = [
+                uart_parse_vec[0],
+                uart_parse_vec[1],
+                uart_parse_vec[2],
+                uart_parse_vec[3],
+                uart_parse_vec[4],
+                uart_parse_vec[5],
+            ];
+            let header = RadioMessageHeader::unpack(&array).ok().unwrap();
+            queue.enqueue(header).ok();
+        }
 
         // Schedule the buffer clear activity (if it isn't already running)
         if !(*uart_parse_active) {
@@ -646,9 +695,28 @@ const APP: () = {
 };
 
 fn send_eps_command(eps_command: EpsCommand, conn_tx: &mut impl _embedded_hal_serial_Write<u8>) {
-    let mut tmp_buf = [0u8; 1024];
+    let mut tmp_buf = [0u8; 512];
     serialize_into_slice(&eps_command, &mut tmp_buf).ok();
     for elem in tmp_buf.iter().take(eps_command.get_size() + 1) {
+        block!(conn_tx.write(*elem)).ok();
+    }
+}
+
+fn send_radio_message(
+    header: &RadioMessageHeader,
+    body: &RadioTelemetry,
+    conn_tx: &mut impl _embedded_hal_serial_Write<u8>,
+) {
+    // write the header
+    let tmp_buf = header.pack().ok().unwrap();
+    for elem in tmp_buf.as_bytes_slice().iter() {
+        block!(conn_tx.write(*elem)).ok();
+    }
+
+    // Write the body
+    let mut tmp_buf = [0u8; 128];
+    serialize_into_slice(body, &mut tmp_buf).ok();
+    for elem in tmp_buf.iter().take(body.get_size() + 1) {
         block!(conn_tx.write(*elem)).ok();
     }
 }
@@ -763,10 +831,10 @@ fn run_radio_state_machine(
 
         // Radio On Steady State
         RadioState::RadioOnNop => match soh.batteryVoltageState {
-            BatteryVoltageState::BothHigh => RadioState::RadioOnPopulateSOH, // Populate SOH if battery is still good
+            BatteryVoltageState::BothHigh => RadioState::RadioOnAction, // Keep Radio on if battery is still good
             _ => RadioState::SendRadioOffCmd, // Turn off if battery is low
         },
-        RadioState::RadioOnPopulateSOH => RadioState::RadioOnNop, // loop back to RadioOnNop
+        RadioState::RadioOnAction => RadioState::RadioOnNop, // loop back to RadioOnNop
 
         // Transition to Radio Off. Turn of Hpwr2
         RadioState::SendRadioOffCmd => match recieved_ack {
@@ -902,22 +970,31 @@ fn apply_radio_state_machine(
         }),
         RadioState::WaitVerifyRadioOnCmd1 => None,
         RadioState::RadioOnNop => None,
-        RadioState::RadioOnPopulateSOH => None,
+        RadioState::RadioOnAction => None,
         RadioState::RadioPowerFailure => None,
     }
 }
 
-fn talk_to_radio(current_radio_state: &RadioState) {
+fn determine_radio_action(
+    current_radio_state: &RadioState,
+    radio_nop_counts: &mut u32,
+) -> Option<RadioAction> {
     match current_radio_state {
-        RadioState::RadioOnPopulateSOH => {
-            // Do something...
-            //Send a message to the radio with the SOH information?? I think that is reasonable
+        RadioState::RadioOnAction => {
+            if *radio_nop_counts % SEND_TELEM_TO_RADIO == 0 {
+                return Some(RadioAction::PopulateTelem);
+            }
         }
-        _ => { /* Do Nothing */ }
-    }
-    //if *current_radio_state == RadioState::RadioOnPopulateSOH {
-    //    // Do Something in here
-    //}
+        RadioState::RadioOnNop => {
+            // Increment nop counts
+            *radio_nop_counts += 1;
+        }
+        _ => {
+            // Reset counter
+            *radio_nop_counts = 0;
+        }
+    };
+    None
 }
 
 //fn pet_watchdog(watchdog_done: &mut WatchdogPinType) {

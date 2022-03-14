@@ -1,4 +1,6 @@
 extern crate stm32l4xx_hal as hal;
+use packed_struct::prelude::*;
+
 use hal::{
     adc, delay, gpio, prelude::*, serial, serial::Serial, stm32::UART4, stm32::USART2,
     stm32::USART3,
@@ -27,7 +29,21 @@ pub enum RadioState {
     VerifyRadioOnCmd,
     WaitVerifyRadioOnCmd1,
     RadioOnNop,
-    RadioOnPopulateSOH,
+    RadioOnAction,
+}
+
+#[derive(core::fmt::Debug, core::marker::Copy, core::clone::Clone)]
+pub enum RadioAction {
+    PopulateTelem,
+}
+
+#[derive(PackedStruct, core::fmt::Debug, core::marker::Copy, core::clone::Clone)]
+#[packed_struct(endian = "lsb")]
+pub struct RadioMessageHeader {
+    pub hwid: u16,
+    pub sequence_number: u16,
+    pub destination: u8,
+    pub command_id: u8,
 }
 
 pub struct AVI {
