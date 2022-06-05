@@ -4,12 +4,12 @@ syntax = "proto3";
 package protos.no_std;
 
 enum CommandID {
-    SetPowerRailState = 1;
-    GetPowerRailState = 2;
-    GetBatteryVoltage = 3;
-    GetSolarVoltage = 4;
-    GetBatteryVoltageState = 5;
-    GetBatteryManagerState = 6;
+    SetPowerRailState = 0;
+    GetPowerRailState = 1;
+    GetBatteryVoltage = 2;
+    GetSolarVoltage = 3;
+    GetBatteryVoltageState = 4;
+    GetBatteryManagerState = 5;
 }
 
 enum PowerRails {
@@ -59,16 +59,16 @@ message SolarVoltage {
 }
 
 enum BatteryVoltageState {
-    BothHigh = 1;
-    B1HighB2Low = 2;
-    B1LowB2High = 3;
-    BothLow = 4;
+    BothHigh = 0;
+    B1HighB2Low = 1;
+    B1LowB2High = 2;
+    BothLow = 3;
 }
 
 enum BatteryManagerState {
-    Suspended = 1;
-    LowPower = 2;
-    HighPower = 3;
+    Suspended = 0;
+    LowPower = 1;
+    HighPower = 2;
 }
 
 message BatteryManagerStates {

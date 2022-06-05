@@ -42,7 +42,7 @@ static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
 const BLINK_PERIOD: u32 = 8_000_000;
 const EPS_QUERY_PERIOD: u32 = 4_000_000;
 const UART_PARSE_PERIOD: u32 = 1_000_000;
-const SEND_TELEM_TO_RADIO: u32 = 20;
+const SEND_TELEM_TO_RADIO: u32 = 5;
 
 #[rtic::app(device = hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
@@ -263,8 +263,8 @@ const APP: () = {
                 let _th4 = adc.read(&mut analog_pins.th4).unwrap();
                 let _th5 = adc.read(&mut analog_pins.th5).unwrap();
                 let _th6 = adc.read(&mut analog_pins.th6).unwrap();
-                let _th7 = adc.read(&mut analog_pins.th6).unwrap();
-                let _th8 = adc.read(&mut analog_pins.th6).unwrap();
+                let _th7 = adc.read(&mut analog_pins.th7).unwrap();
+                let _th8 = adc.read(&mut analog_pins.th8).unwrap();
 
                 //
                 // 2)
@@ -462,13 +462,12 @@ const APP: () = {
             }
 
             // Write string buffer out to UART
-            for c in test_str_buffer.as_str().bytes() {
-                block!(debug_tx.write(c)).unwrap();
-            }
+            //for c in test_str_buffer.as_str().bytes() {
+            //    block!(debug_tx.write(c)).unwrap();
+            //}
 
             //
-            // 7) Figure out what to do with the radio (If the radio is in a good state )
-            //    (If in correct state for radio messages, that is)
+            // 7) Figure out what to do with the radio (If in correct state for radio messages, that is)
             match determine_radio_action(&radioState, &mut radio_nop_counts) {
                 Some(RadioAction::PopulateTelem) => {
                     let header = RadioMessageHeader {
@@ -556,16 +555,18 @@ const APP: () = {
             uart_parse_vec.push(b).ok();
         };
 
-        // If we have 6 bytes (the size of the header, parse)
-        if uart_parse_vec.len() == 6 {
+        // If we have 6 bytes (the size of the header, parse) + 3 of the preamble
+        // And the first two bytes line up with the expected preamble
+        if uart_parse_vec.len() == (6 + 3) && uart_parse_vec[0] == 0x22 && uart_parse_vec[1] == 0x69
+        {
             // there has to be a better way
             let array: [u8; 6] = [
-                uart_parse_vec[0],
-                uart_parse_vec[1],
-                uart_parse_vec[2],
                 uart_parse_vec[3],
                 uart_parse_vec[4],
                 uart_parse_vec[5],
+                uart_parse_vec[6],
+                uart_parse_vec[7],
+                uart_parse_vec[8],
             ];
             let header = RadioMessageHeader::unpack(&array).ok().unwrap();
             queue.enqueue(header).ok();
@@ -656,7 +657,7 @@ const APP: () = {
             6 => PowerRails::Rail7,
             7 => PowerRails::Rail8,
             8 => PowerRails::Rail9,
-            9 => PowerRails::Rail9,
+            9 => PowerRails::Rail10,
             10 => PowerRails::Rail11,
             11 => PowerRails::Rail12,
             12 => PowerRails::Rail13,
@@ -708,15 +709,26 @@ fn send_radio_message(
     conn_tx: &mut impl _embedded_hal_serial_Write<u8>,
 ) {
     // write the header
-    let tmp_buf = header.pack().ok().unwrap();
-    for elem in tmp_buf.as_bytes_slice().iter() {
+    let header_buf = header.pack().ok().unwrap();
+    let header_size = header_buf.len();
+
+    // Write the body
+    let mut body_buf = [0u8; 128];
+    let body_size = body.get_size() + 1;
+    serialize_into_slice(body, &mut body_buf).ok();
+
+    let preamble: [u8; 3] = [0x22, 0x69, (header_size + body_size) as u8];
+
+    // These should be one for loop but I'm bad at rust
+    for elem in preamble.as_bytes_slice().iter() {
         block!(conn_tx.write(*elem)).ok();
     }
 
-    // Write the body
-    let mut tmp_buf = [0u8; 128];
-    serialize_into_slice(body, &mut tmp_buf).ok();
-    for elem in tmp_buf.iter().take(body.get_size() + 1) {
+    for elem in header_buf.as_bytes_slice().iter() {
+        block!(conn_tx.write(*elem)).ok();
+    }
+
+    for elem in body_buf.iter().take(body_size) {
         block!(conn_tx.write(*elem)).ok();
     }
 }

@@ -15,12 +15,12 @@ use super::super::*;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CommandID {
-    SetPowerRailState = 1,
-    GetPowerRailState = 2,
-    GetBatteryVoltage = 3,
-    GetSolarVoltage = 4,
-    GetBatteryVoltageState = 5,
-    GetBatteryManagerState = 6,
+    SetPowerRailState = 0,
+    GetPowerRailState = 1,
+    GetBatteryVoltage = 2,
+    GetSolarVoltage = 3,
+    GetBatteryVoltageState = 4,
+    GetBatteryManagerState = 5,
 }
 
 impl Default for CommandID {
@@ -32,12 +32,12 @@ impl Default for CommandID {
 impl From<i32> for CommandID {
     fn from(i: i32) -> Self {
         match i {
-            1 => CommandID::SetPowerRailState,
-            2 => CommandID::GetPowerRailState,
-            3 => CommandID::GetBatteryVoltage,
-            4 => CommandID::GetSolarVoltage,
-            5 => CommandID::GetBatteryVoltageState,
-            6 => CommandID::GetBatteryManagerState,
+            0 => CommandID::SetPowerRailState,
+            1 => CommandID::GetPowerRailState,
+            2 => CommandID::GetBatteryVoltage,
+            3 => CommandID::GetSolarVoltage,
+            4 => CommandID::GetBatteryVoltageState,
+            5 => CommandID::GetBatteryManagerState,
             _ => Self::default(),
         }
     }
@@ -142,10 +142,10 @@ impl<'a> From<&'a str> for PowerRails {
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum BatteryVoltageState {
-    BothHigh = 1,
-    B1HighB2Low = 2,
-    B1LowB2High = 3,
-    BothLow = 4,
+    BothHigh = 0,
+    B1HighB2Low = 1,
+    B1LowB2High = 2,
+    BothLow = 3,
 }
 
 impl Default for BatteryVoltageState {
@@ -157,10 +157,10 @@ impl Default for BatteryVoltageState {
 impl From<i32> for BatteryVoltageState {
     fn from(i: i32) -> Self {
         match i {
-            1 => BatteryVoltageState::BothHigh,
-            2 => BatteryVoltageState::B1HighB2Low,
-            3 => BatteryVoltageState::B1LowB2High,
-            4 => BatteryVoltageState::BothLow,
+            0 => BatteryVoltageState::BothHigh,
+            1 => BatteryVoltageState::B1HighB2Low,
+            2 => BatteryVoltageState::B1LowB2High,
+            3 => BatteryVoltageState::BothLow,
             _ => Self::default(),
         }
     }
@@ -180,9 +180,9 @@ impl<'a> From<&'a str> for BatteryVoltageState {
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum BatteryManagerState {
-    Suspended = 1,
-    LowPower = 2,
-    HighPower = 3,
+    Suspended = 0,
+    LowPower = 1,
+    HighPower = 2,
 }
 
 impl Default for BatteryManagerState {
@@ -194,9 +194,9 @@ impl Default for BatteryManagerState {
 impl From<i32> for BatteryManagerState {
     fn from(i: i32) -> Self {
         match i {
-            1 => BatteryManagerState::Suspended,
-            2 => BatteryManagerState::LowPower,
-            3 => BatteryManagerState::HighPower,
+            0 => BatteryManagerState::Suspended,
+            1 => BatteryManagerState::LowPower,
+            2 => BatteryManagerState::HighPower,
             _ => Self::default(),
         }
     }
