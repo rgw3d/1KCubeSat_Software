@@ -4,12 +4,12 @@ syntax = "proto3";
 package protos.no_std;
 
 enum CommandID {
-    SetPowerRailState = 1;
-    GetPowerRailState = 2;
-    GetBatteryVoltage = 3;
-    GetSolarVoltage = 4;
-    GetBatteryVoltageState = 5;
-    GetBatteryManagerState = 6;
+    SetPowerRailState = 0;
+    GetPowerRailState = 1;
+    GetBatteryVoltage = 2;
+    GetSolarVoltage = 3;
+    GetBatteryVoltageState = 4;
+    GetBatteryManagerState = 5;
 }
 
 enum PowerRails {
@@ -59,16 +59,16 @@ message SolarVoltage {
 }
 
 enum BatteryVoltageState {
-    BothHigh = 1;
-    B1HighB2Low = 2;
-    B1LowB2High = 3;
-    BothLow = 4;
+    BothHigh = 0;
+    B1HighB2Low = 1;
+    B1LowB2High = 2;
+    BothLow = 3;
 }
 
 enum BatteryManagerState {
-    Suspended = 1;
-    LowPower = 2;
-    HighPower = 3;
+    Suspended = 0;
+    LowPower = 1;
+    HighPower = 2;
 }
 
 message BatteryManagerStates {
@@ -84,5 +84,47 @@ message EpsResponse {
         SolarVoltage solarVoltage = 4;
         BatteryVoltageState batteryVoltageState = 5;
         BatteryManagerStates batteryManagerStates = 6;
+    }
+}
+
+
+enum TelemetryID {
+    SOH = 0;
+}
+
+message RailSOH {
+    bool rail1 = 1;
+    bool rail2 = 2;
+    bool rail3 = 3;
+    bool rail4 = 4;
+    bool rail5 = 5;
+    bool rail6 = 6;
+    bool rail7 = 7;
+    bool rail8 = 8;
+    bool rail9 = 9;
+    bool rail10 = 10;
+    bool rail11 = 11;
+    bool rail12 = 12;
+    bool rail13 = 13;
+    bool rail14 = 14;
+    bool rail15 = 15;
+    bool rail16 = 16;
+    bool hpwr1 = 17;
+    bool hpwr2 = 18;
+    bool hpwrEn = 19;
+}
+
+message RadioSOH {
+    BatteryVoltage batteryVoltage = 1;
+    SolarVoltage solarVoltage = 2;
+    BatteryVoltageState batteryVoltageState = 3;
+    BatteryManagerStates batteryManagerStates = 4;
+    RailSOH railSoh = 5;
+}
+
+message RadioTelemetry {
+    TelemetryID tid = 1;
+    oneof message {
+        RadioSOH soh = 2;
     }
 }

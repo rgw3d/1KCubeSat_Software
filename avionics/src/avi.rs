@@ -1,5 +1,50 @@
 extern crate stm32l4xx_hal as hal;
-use hal::{adc, delay, gpio, prelude::*, serial, serial::Serial, stm32::UART4, stm32::USART2};
+use packed_struct::prelude::*;
+
+use hal::{
+    adc, delay, gpio, prelude::*, serial, serial::Serial, stm32::UART4, stm32::USART2,
+    stm32::USART3,
+};
+
+#[derive(core::fmt::Debug, core::marker::Copy, core::clone::Clone)]
+pub enum RadioState {
+    RadioPowerFailure,
+    SendRadioOffCmd,
+    WaitRadioOffCmd,
+    SendHpwrEnOffCmd,
+    WaitHpwrEnOffCmd,
+    Send3V3RailOffCmd,
+    Wait3V3RailOffCmd,
+    RadioOff,
+    Send3V3RailOnCmd,
+    Wait3V3RailOnCmd1,
+    Verify3V3RailOnCmd,
+    WaitVerify3V3RailOnCmd1,
+    SendHpwrEnCmd,
+    WaitHpwrEnCmd1,
+    SendRadioOnCmd,
+    WaitRadioOnCmd1,
+    VerifyHpwrOnCmd,
+    WaitVerifyHpwrOnCmd1,
+    VerifyRadioOnCmd,
+    WaitVerifyRadioOnCmd1,
+    RadioOnNop,
+    RadioOnAction,
+}
+
+#[derive(core::fmt::Debug, core::marker::Copy, core::clone::Clone)]
+pub enum RadioAction {
+    PopulateTelem,
+}
+
+#[derive(PackedStruct, core::fmt::Debug, core::marker::Copy, core::clone::Clone)]
+#[packed_struct(endian = "lsb")]
+pub struct RadioMessageHeader {
+    pub hwid: u16,
+    pub sequence_number: u16,
+    pub destination: u8,
+    pub command_id: u8,
+}
 
 pub struct AVI {
     //device: hal::stm32::Peripherals,
@@ -10,6 +55,8 @@ pub struct AVI {
     pub debug_tx: serial::Tx<USART2>,
     pub conn_rx: serial::Rx<UART4>,
     pub conn_tx: serial::Tx<UART4>,
+    pub radio_rx: serial::Rx<USART3>,
+    pub radio_tx: serial::Tx<USART3>,
     pub led1: gpio::PF2<gpio::Output<gpio::OpenDrain>>,
     pub led2: gpio::PF3<gpio::Output<gpio::OpenDrain>>,
     pub led3: gpio::PF4<gpio::Output<gpio::OpenDrain>>,
@@ -211,6 +258,7 @@ impl AVI {
         // Create the tx & rx handles
         let (debug_tx, debug_rx) = debug_serial.split();
 
+        // Setup the Serial abstraction for the EPS interface
         let conn_tx_pin = bank
             .gpioc
             .pc10
@@ -230,6 +278,26 @@ impl AVI {
         // Create the tx & rx handles
         let (conn_tx, conn_rx) = conn_serial.split();
 
+        // Setup the serial abstraction for the radio interface
+        let radio_tx_pin = bank
+            .gpioc
+            .pc4
+            .into_af7(&mut bank.gpioc.moder, &mut bank.gpioc.afrl);
+        let radio_rx_pin = bank
+            .gpioc
+            .pc5
+            .into_af7(&mut bank.gpioc.moder, &mut bank.gpioc.afrl);
+        let mut radio_serial = Serial::usart3(
+            device.USART3,
+            (radio_tx_pin, radio_rx_pin),
+            serial::Config::default().baudrate(115_200.bps()),
+            clocks,
+            &mut rcc.apb1r1,
+        );
+        radio_serial.listen(serial::Event::Rxne);
+        // Create the tx & rx handles
+        let (radio_tx, radio_rx) = radio_serial.split();
+
         AVI {
             //device,
             //parts: bank,
@@ -239,6 +307,8 @@ impl AVI {
             debug_tx,
             conn_rx,
             conn_tx,
+            radio_rx,
+            radio_tx,
             led1,
             led2,
             led3,

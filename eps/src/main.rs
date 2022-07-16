@@ -277,11 +277,20 @@ const APP: () = {
                             rail_state[(railIdx as usize)] = railState;
                             // Apply change to Power Rail
                             apply_power_rail_state(&rail_state, digital_pins);
-                        }
-                        // return response
-                        EpsResponse {
-                            cid: eps_command.cid,
-                            resp: mod_EpsResponse::OneOfresp::None,
+                            // return response
+                            EpsResponse {
+                                cid: eps_command.cid,
+                                resp: mod_EpsResponse::OneOfresp::railState(RailState {
+                                    railIdx: rs.railIdx,
+                                    railState: rs.railState,
+                                }),
+                            }
+                        } else {
+                            // return response
+                            EpsResponse {
+                                cid: eps_command.cid,
+                                resp: mod_EpsResponse::OneOfresp::None,
+                            }
                         }
                     }
                     CommandID::GetPowerRailState => {
